@@ -53,7 +53,7 @@ const SURVEY_INSTRUMENT = [
   { id: 'q-trust', type: 'likert', text: 'How much do you trust that the terms are as good as they sound?', scale: ['Not at all', 'A little', 'Somewhat', 'Mostly', 'Completely'], source: { kind: 'objection', label: 'Skepticism that the offer is too good to be true' } },
   { id: 'q-comp-apr', type: 'comprehension', text: 'After any intro period, the APR on this card is…', options: ['0% forever', 'A variable go-to APR based on creditworthiness', 'Always 9.99%', 'There is no APR'], correctIndex: 1, source: { kind: 'comprehensionGap', label: 'Material-term check — APR', term: 'APR after intro period' } },
   { id: 'q-comp-fee', type: 'comprehension', text: 'The annual fee on this card is…', options: ['Stated clearly up front', 'Not stated anywhere', 'Charged only after year one', 'Refundable'], correctIndex: 0, source: { kind: 'comprehensionGap', label: 'Material-term check — fee', term: 'Annual fee disclosure' } },
-  { id: 'q-maxdiff', type: 'maxdiff', text: 'Which of these matters MOST to you?', source: { kind: 'theme', label: 'Value-prop trade-off raised in the discussion' } },
+  { id: 'q-pref', type: 'maxdiff', preference: true, text: 'If you could apply for only ONE of these cards, which would you choose?', source: { kind: 'baseline', label: 'Head-to-head preference — produces the preference-share result' } },
   { id: 'q-intent', type: 'intent', text: 'How likely are you to apply for this card?', scale: ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'], source: { kind: 'intent', label: 'Apply-intent go-around in the focus group' } },
   { id: 'q-open', type: 'open', text: 'What, if anything, gives you pause about applying?', source: { kind: 'objection', label: 'Worried about fees after the intro' } },
 ]
@@ -223,8 +223,8 @@ function buildSurvey(id, variants, segments, custom, perVariantStats, focusGroup
   const ranking = [...perVariant].sort((a, b) => b.prefShare - a.prefShare).map((v) => v.variantId)
   const n = id.includes('student') ? 300 : 250
   const instrument = SURVEY_INSTRUMENT.map((q) => ({ ...q }))
-  const { questions, takeaways } = deriveSurveyOutcomes({ instrument, n, variants, segs, perVariant, focusGroup })
-  return { instrument, results: { n, perVariant, ranking, questions, takeaways } }
+  const { questions, takeaways, cells } = deriveSurveyOutcomes({ instrument, n, variants, segs, perVariant, focusGroup })
+  return { instrument, results: { n, perVariant, ranking, cells, questions, takeaways } }
 }
 
 function buildAB({ baselineRate, mde, dailyTrafficPerArm, prefShare, primaryMetric }) {

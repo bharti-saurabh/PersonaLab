@@ -1,15 +1,16 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useProject } from '../state/store.jsx'
-import { buildSurvey, regenerateSurvey, fieldSurvey } from '../services/generators.js'
+import { buildSurvey, regenerateSurvey, fieldSurvey, sampleAudience } from '../services/generators.js'
 import { hasKey } from '../services/llm.js'
 import { getSegment } from '../data/segments.js'
 import { SectionTitle, Card, Badge, StatCard, SyntheticBanner, EmptyState } from '../components/ui.jsx'
 import { useStagedGenerate, GenConsole, Stagger, ThinkingPill } from '../components/generate.jsx'
-import { DonutCard, PALETTE } from '../components/charts.jsx'
+import { PALETTE } from '../components/charts.jsx'
 import { exportCSV, exportJSON, exportSurveyCSV, printReport } from '../utils/export.js'
 import {
   ClipboardList, Wand2, Play, FileDown, Trash2, Plus, Users, ListChecks, CheckCircle2, Trophy,
   Link2, MessageSquare, RefreshCw, Lightbulb, AlertTriangle, Quote, BarChart3, Sparkles, Pencil,
+  Eye, Layers, UserCircle2, Split,
 } from 'lucide-react'
 
 const TYPE_META = {
@@ -100,6 +101,12 @@ export default function Step6Survey() {
   const regen = useStagedGenerate()
   const field = useStagedGenerate()
   const [comments, setComments] = useState('')
+  const [audTab, setAudTab] = useState('split')
+  const surveySize = project.panel.surveySize ?? 250
+  const audience = useMemo(
+    () => sampleAudience({ target: project.target, variants, n: surveySize, distribution: project.panel.distribution, previewCount: 8 }),
+    [surveySize, variants, project.target, project.panel.distribution]
+  )
 
   const variantName = (id) => variants.find((v) => v.id === id)?.name || id
   const segs = (project.target.segments || []).map((id) => getSegment(id, project.target.custom)).filter(Boolean)
@@ -159,11 +166,10 @@ export default function Step6Survey() {
   }
 
   const setSurveySize = (n) => update({ panel: { ...project.panel, surveySize: Math.max(50, Math.min(1000, Math.round(n) || 250)) } })
-  const surveySize = project.panel.surveySize ?? 250
 
   const fieldPanel = async () => {
     const res = await field.run({
-      steps: ['Sampling the synthetic audience…', `Presenting variants to ${surveySize} respondents…`, 'Every respondent answers every question…', 'Tabulating per-question distributions…', 'Summarizing key takeaways…'],
+      steps: ['Sampling the synthetic audience…', 'Assigning each respondent to one variant (A/B split)…', 'Each respondent answers about their assigned variant…', 'Running the head-to-head preference question…', 'Tabulating per-question distributions…', 'Summarizing key takeaways…'],
       work: async () => fieldSurvey({ settings, instrument, panelSize: surveySize, variants, target: project.target, focusGroup: fg }),
       minMs: 2600,
     })
@@ -179,7 +185,6 @@ export default function Step6Survey() {
     intentLeader = [...results.perVariant].sort((a, b) => b.applyIntent - a.applyIntent)[0]
     avgComp = Math.round(results.perVariant.reduce((s, v) => s + v.comprehensionRate, 0) / results.perVariant.length)
   }
-  const prefDonut = results ? results.perVariant.map((v, i) => ({ name: variantName(v.variantId), value: v.prefShare, color: PALETTE[i % PALETTE.length] })) : []
   const exportResultsRows = results
     ? results.perVariant.map((v) => ({ variant: variantName(v.variantId), top2box_pct: v.top2box, comprehension_pct: v.comprehensionRate, apply_intent: v.applyIntent, preference_share_pct: v.prefShare }))
     : []
@@ -331,7 +336,7 @@ export default function Step6Survey() {
           <div className="grid place-items-center h-9 w-9 rounded-lg bg-violet-50 text-violet-600"><Users size={18} /></div>
           <div>
             <h3 className="font-bold text-ink-900">Synthetic audience</h3>
-            <p className="text-xs text-ink-500">Choose how many synthetic respondents to field to. Every respondent answers every question, drawn from your target segment mix.</p>
+            <p className="text-xs text-ink-500">This is a <b>between-subjects A/B test</b>: each respondent is assigned <b>one</b> variant and answers the diagnostics about that variant only — everyone answers the final head-to-head preference question. Drawn from your Step 2 segment mix.</p>
           </div>
         </div>
 
@@ -339,7 +344,7 @@ export default function Step6Survey() {
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Audience size</label>
-              <span className="text-[11px] font-mono text-ink-400">{surveySize} respondents</span>
+              <span className="text-[11px] font-mono text-ink-400">{surveySize} respondents · ~{Math.round(surveySize / variants.length)} per variant</span>
             </div>
             <div className="flex items-center gap-3">
               <input type="range" min={50} max={1000} step={10} value={surveySize} onChange={(e) => setSurveySize(Number(e.target.value))} className="flex-1 accent-brand-600" />
@@ -358,6 +363,80 @@ export default function Step6Survey() {
         </div>
         {instrument.length === 0 && <p className="text-xs text-ink-400 mt-3">Build the survey questions first to enable fielding.</p>}
         {instrumentChanged && <p className="text-xs text-amber-600 mt-3 flex items-center gap-1.5"><AlertTriangle size={13} /> Questions changed since the last run — re-field to refresh the outcomes.</p>}
+
+        {/* Assignment + respondent preview */}
+        <div className="mt-5 border-t border-ink-100 pt-4">
+          <div className="flex items-center gap-1.5 mb-4">
+            <button onClick={() => setAudTab('split')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold ${audTab === 'split' ? 'bg-brand-600 text-white' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}>
+              <Split size={14} /> Variant split
+            </button>
+            <button onClick={() => setAudTab('people')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold ${audTab === 'people' ? 'bg-brand-600 text-white' : 'bg-ink-50 text-ink-600 hover:bg-ink-100'}`}>
+              <Users size={14} /> Respondent preview
+            </button>
+          </div>
+
+          {audTab === 'split' ? (
+            <div className="grid sm:grid-cols-2 gap-5">
+              <div>
+                <div className="label mb-2 flex items-center gap-1.5"><Split size={13} /> Variant assignment</div>
+                <div className="space-y-2">
+                  {audience.cells.map((c, i) => (
+                    <div key={c.variantId} className="flex items-center gap-3">
+                      <span className="w-32 shrink-0 truncate text-sm text-ink-700">{c.name}</span>
+                      <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-ink-100">
+                        <div className="h-full rounded-full" style={{ width: `${Math.round((c.n / audience.total) * 100)}%`, background: PALETTE[i % PALETTE.length] }} />
+                      </div>
+                      <span className="w-24 shrink-0 text-right font-mono text-sm text-ink-800">{c.n} <span className="text-ink-400">resp.</span></span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-ink-400 mt-2">Each respondent sees exactly one variant — mirroring a real A/B field test, so there's no question of "which creative" a response is about.</p>
+              </div>
+              <div>
+                <div className="label mb-2 flex items-center gap-1.5"><Layers size={13} /> Audience composition</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400 mb-1.5">By segment</div>
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {audience.composition.bySegment.map((s) => <span key={s.name} className="chip bg-ink-50 text-ink-600">{s.name} · {s.n}</span>)}
+                </div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400 mb-1.5">By within-segment archetype</div>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="chip bg-emerald-50 text-emerald-700">Core · {audience.composition.byArchetype.core}</span>
+                  <span className="chip bg-sky-50 text-sky-700">Adjacent · {audience.composition.byArchetype.adjacent}</span>
+                  <span className="chip bg-amber-50 text-amber-700">Skeptical · {audience.composition.byArchetype.skeptical}</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p className="text-[11px] text-ink-400 mb-3">A representative sample of the {audience.total} synthetic respondents — each tagged with the one variant it's assigned. Illustrative profiles, not real people.</p>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {audience.sample.map((p, i) => {
+                  const vi = variants.findIndex((v) => v.id === p.assignedVariantId)
+                  return (
+                    <Stagger key={p.id} i={i} className="rounded-lg border border-ink-100 p-3">
+                      <div className="flex items-center gap-2">
+                        <span className="grid place-items-center h-8 w-8 rounded-full bg-ink-100 text-ink-500"><UserCircle2 size={18} /></span>
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-ink-900 truncate">{p.name}</div>
+                          <div className="text-[11px] text-ink-400">{p.age} · {p.income}</div>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-ink-600 mt-2 leading-snug">{p.profile}</p>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <span className="chip bg-ink-50 text-ink-500 text-[10px] capitalize">{p.financialLiteracy} literacy</span>
+                        <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold text-white shrink-0" style={{ background: PALETTE[(vi < 0 ? 0 : vi) % PALETTE.length] }}>
+                          <Eye size={11} /> {p.assignedVariantName}
+                        </span>
+                      </div>
+                    </Stagger>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       </Card>
 
       {field.running && <GenConsole lines={field.lines} title="Fielding to the synthetic audience" subtitle={`${surveySize} respondents · ${instrument.length} questions · ${variants.length} variants`} />}
@@ -413,41 +492,39 @@ export default function Step6Survey() {
             <div className="flex items-center gap-2 mb-3">
               <BarChart3 size={17} className="text-brand-600" />
               <h3 className="font-bold text-ink-900">Question-by-question outcomes</h3>
-              <span className="text-xs text-ink-400">All {results.n} respondents answered every question</span>
+              <span className="text-xs text-ink-400">Between-subjects · diagnostics within each variant's cell{results.cells?.[0] ? ` (~${results.cells[0].n}/variant)` : ''}</span>
             </div>
             <div className="space-y-4">
               {(results.questions || []).map((q, i) => <QuestionResult key={q.id} q={q} idx={i} variantName={variantName} />)}
             </div>
           </div>
 
-          {/* Variant scorecard (kept for the recommendation step) */}
-          <div className="grid lg:grid-cols-2 gap-5">
-            <DonutCard title="Preference share" subtitle="Share of preference across variants" data={prefDonut} />
-            <Card className="p-5">
-              <div className="flex items-center gap-2.5 mb-3">
-                <div className="grid place-items-center h-9 w-9 rounded-lg bg-amber-50 text-amber-600"><Trophy size={18} /></div>
-                <div>
-                  <h3 className="font-bold text-ink-900">Variant ranking</h3>
-                  <p className="text-xs text-ink-500">Ordered by predicted preference share across the audience.</p>
-                </div>
+          {/* Preference share + ranking — one card, one insight (from the head-to-head question) */}
+          <Card className="p-5">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="grid place-items-center h-9 w-9 rounded-lg bg-amber-50 text-amber-600"><Trophy size={18} /></div>
+              <div>
+                <h3 className="font-bold text-ink-900">Preference share &amp; ranking</h3>
+                <p className="text-xs text-ink-500">From the head-to-head question every respondent answered — this is what feeds the Step 7 recommendation.</p>
               </div>
-              <ol className="space-y-2">
-                {results.ranking.map((id, i) => {
-                  const pv = results.perVariant.find((v) => v.variantId === id)
-                  return (
-                    <Stagger as="li" key={id} i={i} className="flex items-center justify-between rounded-lg border border-ink-100 px-3.5 py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <span className={`grid place-items-center h-6 w-6 rounded-full text-xs font-bold ${i === 0 ? 'bg-amber-500 text-white' : 'bg-ink-100 text-ink-600'}`}>{i + 1}</span>
-                        <span className="font-semibold text-ink-900 text-sm">{variantName(id)}</span>
-                        {i === 0 && <Badge color="emerald">Leader</Badge>}
-                      </div>
-                      <span className="text-sm font-mono text-ink-700">{pv?.prefShare}%</span>
-                    </Stagger>
-                  )
-                })}
-              </ol>
-            </Card>
-          </div>
+            </div>
+            <ol className="space-y-2.5">
+              {results.ranking.map((id, i) => {
+                const pv = results.perVariant.find((v) => v.variantId === id)
+                const share = pv?.prefShare ?? 0
+                return (
+                  <Stagger as="li" key={id} i={i} className="flex items-center gap-3">
+                    <span className={`grid place-items-center h-6 w-6 shrink-0 rounded-full text-xs font-bold ${i === 0 ? 'bg-amber-500 text-white' : 'bg-ink-100 text-ink-600'}`}>{i + 1}</span>
+                    <span className="w-44 shrink-0 truncate flex items-center gap-1.5 font-semibold text-ink-900 text-sm">{variantName(id)}{i === 0 && <Badge color="emerald">Leader</Badge>}</span>
+                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-ink-100">
+                      <div className="h-full rounded-full" style={{ width: `${share}%`, background: PALETTE[i % PALETTE.length] }} />
+                    </div>
+                    <span className="w-12 shrink-0 text-right text-sm font-mono font-semibold text-ink-800">{share}%</span>
+                  </Stagger>
+                )
+              })}
+            </ol>
+          </Card>
 
           {/* Exports */}
           <Card className="p-5">
@@ -495,7 +572,8 @@ function QuestionResult({ q, idx, variantName }) {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-ink-900">{q.text}</p>
           <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-            <Badge color={meta.color}>{meta.label}</Badge>
+            <Badge color={q.preference ? 'violet' : meta.color}>{q.preference ? 'Head-to-head preference' : meta.label}</Badge>
+            <span className="chip bg-ink-50 text-ink-500 text-[10px]">{q.preference ? 'Asked of all respondents' : 'Asked within each variant cell'}</span>
             <SourceChip source={q.source} />
           </div>
         </div>
@@ -514,7 +592,7 @@ function QuestionResult({ q, idx, variantName }) {
           {q.byVariant?.length > 1 && (
             <div className="space-y-1.5 pt-1">
               {q.byVariant.map((bv, i) => (
-                <RowBar key={bv.variantId} label={bv.name} pct={bv.top2box} tone={i === 0 ? 'brand' : 'violet'}
+                <RowBar key={bv.variantId} label={bv.name} pct={bv.top2box} tone={i === 0 ? 'brand' : 'violet'} count={bv.n != null ? `n=${bv.n}` : undefined}
                   sub={<span className="text-[11px] text-ink-400">· top-2-box</span>} />
               ))}
             </div>
@@ -553,6 +631,7 @@ function QuestionResult({ q, idx, variantName }) {
 
       {q.type === 'maxdiff' && (
         <div className="space-y-2">
+          {q.preference && <p className="text-[11px] text-ink-400 -mt-1 mb-1">Forced choice across the variants — the share each won is the preference share that feeds the recommendation.</p>}
           {[...q.shares].sort((a, b) => b.pct - a.pct).map((s, i) => (
             <RowBar key={s.variantId || i} label={s.label} pct={s.pct} count={q.counts?.[q.shares.indexOf(s)]}
               tone={i === 0 ? 'violet' : 'ink'}

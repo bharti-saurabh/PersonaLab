@@ -325,6 +325,8 @@ function normalizeQuestion(q, i) {
   }
   if (type === 'comprehension') { out.options = Array.isArray(q.options) ? q.options : []; out.correctIndex = Number.isInteger(q.correctIndex) ? q.correctIndex : 0 }
   if (type === 'maxdiff') out.options = Array.isArray(q.options) ? q.options : []
+  if (q.preference != null) out.preference = !!q.preference
+  else if (type === 'maxdiff' && /prefer|choose|pick (one|only)|apply for only|which (card|one) would/i.test(out.text)) out.preference = true
   out.source = q.source && typeof q.source === 'object'
     ? { kind: q.source.kind || 'theme', label: q.source.label || 'Focus-group insight', term: q.source.term }
     : { kind: 'baseline', label: 'General creative diagnostic' }
@@ -342,7 +344,7 @@ function surveyFromFocus(ins, variants) {
     { id: 'q-trust', type: 'likert', text: 'How much do you trust that the terms are as good as they sound?', scale: ['Not at all', 'A little', 'Somewhat', 'Mostly', 'Completely'], source: { kind: 'objection', label: trustObj } },
     { id: 'q-comp-apr', type: 'comprehension', text: 'After any intro period, the APR on this card is…', options: ['0% forever', 'A variable go-to APR based on creditworthiness', 'Always 9.99%', 'There is no APR'], correctIndex: 1, source: { kind: 'comprehensionGap', label: 'Material-term check — APR', term: gapTerm } },
     { id: 'q-comp-fee', type: 'comprehension', text: 'The annual fee on this card is…', options: ['Stated clearly up front', 'Not stated anywhere', 'Charged only after year one', 'Refundable'], correctIndex: 0, source: { kind: 'comprehensionGap', label: 'Material-term check — fee', term: 'Annual fee disclosure' } },
-    { id: 'q-maxdiff', type: 'maxdiff', text: 'Which of these matters MOST to you?', options: variants.map((v) => v.valueProp || v.name), source: { kind: 'theme', label: 'Value-prop trade-off raised in the discussion' } },
+    { id: 'q-pref', type: 'maxdiff', preference: true, text: 'If you could apply for only ONE of these cards, which would you choose?', options: variants.map((v) => v.name), source: { kind: 'baseline', label: 'Head-to-head preference — produces the preference-share result' } },
     { id: 'q-intent', type: 'intent', text: 'How likely are you to apply for this card?', scale: ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'], source: { kind: 'intent', label: 'Apply-intent go-around in the focus group' } },
     { id: 'q-open', type: 'open', text: 'What, if anything, gives you pause about applying?', source: { kind: 'objection', label: topObj } },
   ]
@@ -468,6 +470,15 @@ export function deriveSurveyOutcomes({ instrument, n, variants, segs = [], perVa
   const fgOf = (id) => focusGroup?.perVariant?.find((v) => v.variantId === id) || {}
   const vName = (id) => variants.find((v) => v.id === id)?.name || id
 
+  // Between-subjects: split the audience into one cell per variant. Diagnostic
+  // questions (appeal / trust / comprehension / intent) are answered ONLY by the
+  // respondents assigned that variant; the head-to-head preference question is the
+  // one comparative item every respondent answers.
+  const k = Math.max(1, variants.length)
+  const cellBase = Math.floor(n / k)
+  const cells = variants.map((v, i) => ({ variantId: v.id, name: vName(v.id), n: cellBase + (i < (n - cellBase * k) ? 1 : 0) }))
+  const cellN = (id) => cells.find((c) => c.variantId === id)?.n ?? Math.round(n / k)
+
   const questions = (instrument || []).map((q) => {
     const r = rng(hash('out' + q.id))
     const base = { id: q.id, type: q.type, text: q.text, source: q.source || null }
@@ -482,7 +493,7 @@ export function deriveSurveyOutcomes({ instrument, n, variants, segs = [], perVa
             ? clampInt(fgOf(v.id).trust ?? 55, 4, 94)
             : clampInt(pv.top2box ?? 60, 4, 94)
         const dist = likertDist(top2, (pv.top2box ?? 60) / 100, r)
-        return { variantId: v.id, name: vName(v.id), distribution: dist, counts: distCounts(dist, n), top2box: dist[3] + dist[4], mean: meanOf(dist) }
+        return { variantId: v.id, name: vName(v.id), n: cellN(v.id), distribution: dist, counts: distCounts(dist, cellN(v.id)), top2box: dist[3] + dist[4], mean: meanOf(dist) }
       })
       const overall = scale.map((_, i) => Math.round(byVariant.reduce((a, bv) => a + bv.distribution[i], 0) / byVariant.length))
       // re-normalize overall to 100 after rounding
@@ -514,10 +525,10 @@ export function deriveSurveyOutcomes({ instrument, n, variants, segs = [], perVa
     }
 
     if (q.type === 'maxdiff') {
-      const opts = (q.options && q.options.length) ? q.options : variants.map((v) => v.valueProp || v.name)
+      const opts = (q.options && q.options.length) ? q.options : (q.preference ? variants.map((v) => v.name) : variants.map((v) => v.valueProp || v.name))
       const shares = variants.map((v, i) => ({ label: opts[i] ?? (v.valueProp || v.name), variantId: v.id, name: vName(v.id), pct: pvOf(v.id).prefShare ?? Math.round(100 / variants.length) }))
       const s = shares.reduce((a, o) => a + o.pct, 0); if (shares[0]) shares[0].pct += (100 - s)
-      return { ...base, shares, counts: distCounts(shares.map((o) => o.pct), n) }
+      return { ...base, preference: !!q.preference, shares, counts: distCounts(shares.map((o) => o.pct), n) }
     }
 
     // open-end → mined themes + representative verbatims
@@ -527,7 +538,55 @@ export function deriveSurveyOutcomes({ instrument, n, variants, segs = [], perVa
   })
 
   const takeaways = surveyTakeaways({ questions, perVariant, variants, segs, ins, n, vName })
-  return { questions, takeaways }
+  return { questions, takeaways, cells }
+}
+
+// Build a representative preview of the synthetic survey audience: how many
+// respondents are assigned to each variant cell (between-subjects), the segment /
+// archetype composition, and a sample of individual respondents with their
+// assigned variant. Deterministic so the preview is stable for a given setup.
+export function sampleAudience({ target, variants, n, distribution, previewCount = 8 }) {
+  const segs = (target?.segments || []).map((id) => getSegment(id, target.custom)).filter(Boolean)
+  const dist = distribution || { core: 0.6, adjacent: 0.25, skeptical: 0.15 }
+  const k = Math.max(1, variants.length)
+  const cellBase = Math.floor(n / k)
+  const cells = variants.map((v, i) => ({ variantId: v.id, name: v.name, n: cellBase + (i < (n - cellBase * k) ? 1 : 0) }))
+  const segCount = Math.max(1, segs.length)
+  const bySegment = (segs.length ? segs : [{ name: 'Target audience' }]).map((s, i) => ({
+    name: s.name, n: Math.round(n / segCount) + (i === 0 ? n - Math.round(n / segCount) * segCount : 0),
+  }))
+  const byArchetype = {
+    core: Math.round(n * dist.core), adjacent: Math.round(n * dist.adjacent), skeptical: Math.round(n * dist.skeptical),
+  }
+
+  const r = rng(hash('aud' + (target?.segments || []).join(',') + n + k))
+  const media = ['TikTok & Instagram', 'YouTube & Reddit', 'Email & news sites', 'Podcasts & X', 'Mobile banking app']
+  const archPool = [
+    ...Array(Math.round(previewCount * dist.core)).fill('core'),
+    ...Array(Math.round(previewCount * dist.adjacent)).fill('adjacent'),
+    ...Array(Math.round(previewCount * dist.skeptical)).fill('skeptical'),
+  ]
+  while (archPool.length < previewCount) archPool.push('core')
+  const archLabel = { core: 'Core', adjacent: 'Adjacent', skeptical: 'Skeptical' }
+  const sample = archPool.slice(0, previewCount).map((arch, i) => {
+    const seg = segs[i % Math.max(segs.length, 1)] || { name: 'Target', motivation: 'value', objections: ['fees'] }
+    const v = variants[i % k]
+    const obj = (seg.objections || ['hidden fees'])[0]
+    return {
+      id: `aud-${i}`,
+      name: `${pick(FIRST_NAMES, r)} ${String.fromCharCode(65 + (i % 26))}.`,
+      age: clampInt(20 + r() * 40, 18, 72),
+      income: `$${clampInt(24 + r() * 90, 18, 160)},000`,
+      segment: seg.name,
+      archetype: arch,
+      financialLiteracy: arch === 'core' ? pick(['medium', 'high'], r) : pick(['low', 'medium', 'high'], r),
+      mediaHabits: pick(media, r),
+      assignedVariantId: v.id,
+      assignedVariantName: v.name,
+      profile: `${archLabel[arch]} member of ${seg.name}${obj ? ` · wary of ${String(obj).toLowerCase()}` : ''}`,
+    }
+  })
+  return { cells, sample, composition: { bySegment, byArchetype }, total: n }
 }
 
 function surveyTakeaways({ questions, perVariant, variants, segs, ins, n, vName }) {
@@ -598,7 +657,7 @@ export async function fieldSurvey({ settings, instrument, panelSize, variants, t
   })
   const ranking = [...perVariant].sort((a, b) => b.prefShare - a.prefShare).map((v) => v.variantId)
   const cleanPV = perVariant.map(({ _score, ...rest }) => rest)
-  const { questions, takeaways } = deriveSurveyOutcomes({ instrument, n, variants, segs, perVariant: cleanPV, focusGroup })
+  const { questions, takeaways, cells } = deriveSurveyOutcomes({ instrument, n, variants, segs, perVariant: cleanPV, focusGroup })
 
   // With a key, let the LLM polish the plain-English takeaways (numbers stay anchored).
   let finalTakeaways = takeaways
@@ -616,7 +675,7 @@ Return JSON: {"takeaways": ["...", "..."]} — 4-6 tight bullets, keeping all fi
     } catch (e) { /* keep deterministic */ }
   }
 
-  return { n, perVariant: cleanPV, ranking, questions, takeaways: finalTakeaways }
+  return { n, perVariant: cleanPV, ranking, cells, questions, takeaways: finalTakeaways }
 }
 
 // =====================================================================
