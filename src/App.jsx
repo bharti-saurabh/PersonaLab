@@ -27,7 +27,7 @@ const STEP_COMPONENTS = {
 function BrandMark({ size = 36 }) {
   return (
     <div className="flex items-center gap-3">
-      <img src="/capone-logo.webp" alt="Capital One" width={size} height={size}
+      <img src={`${import.meta.env.BASE_URL}capone-logo.webp`} alt="Capital One" width={size} height={size}
         className="rounded-lg object-contain" style={{ width: size, height: size }} />
       <div className="leading-none">
         <div className="flex items-baseline gap-1.5">
@@ -211,7 +211,7 @@ function Footer() {
     <footer className="no-print border-t border-ink-200 bg-white/60">
       <div className="max-w-[1180px] mx-auto px-6 py-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 text-[11px] text-ink-400">
-          <img src="/capone-logo.webp" alt="" width={16} height={16} className="opacity-70" />
+          <img src={`${import.meta.env.BASE_URL}capone-logo.webp`} alt="" width={16} height={16} className="opacity-70" />
           <span>Persona Lab · Capital One — compliance-first synthetic audience platform.</span>
         </div>
         <div className="flex items-center gap-1.5 text-[11px] text-ink-400">
@@ -229,7 +229,7 @@ function NoProject({ onSettings, settingsOpen, setSettingsOpen }) {
   return (
     <div className="min-h-full grid place-items-center p-6">
       <div className="card p-8 max-w-md text-center shadow-pop">
-        <img src="/capone-logo.webp" alt="Capital One" width={56} height={56} className="mx-auto mb-3" />
+        <img src={`${import.meta.env.BASE_URL}capone-logo.webp`} alt="Capital One" width={56} height={56} className="mx-auto mb-3" />
         <div className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-accent-600">Capital One</div>
         <h1 className="text-2xl font-extrabold mt-0.5">Persona Lab</h1>
         <p className="text-sm text-ink-500 mt-1 mb-4">Compliance-first synthetic audience platform. No campaigns yet — create one to begin.</p>

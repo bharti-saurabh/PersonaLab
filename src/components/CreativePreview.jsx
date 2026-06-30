@@ -16,7 +16,7 @@ function v(variant, key) {
 }
 
 const Swoosh = ({ size = 20 }) => (
-  <img src="/capone-logo.webp" alt="Capital One" width={size} height={size} className="object-contain shrink-0" style={{ width: size, height: size }} />
+  <img src={`${import.meta.env.BASE_URL}capone-logo.webp`} alt="Capital One" width={size} height={size} className="object-contain shrink-0" style={{ width: size, height: size }} />
 )
 
 export default function CreativePreview({ variant, channel }) {
