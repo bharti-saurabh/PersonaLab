@@ -8,6 +8,10 @@ import { callLLMJson, hasKey } from './llm.js'
 import { describeTarget, getSegment } from '../data/segments.js'
 import { PRODUCTS_BY_ID, CHANNELS_BY_ID, channelFields } from '../data/products.js'
 
+// The target narrative that drives every downstream step. Prefer the user's
+// edited brief (Step 2) when present, else the auto-generated description.
+const briefOf = (target) => (target?.brief?.trim() || describeTarget(target.segments, target.custom))
+
 // ---------- deterministic helpers (stable pseudo-randomness) ----------
 function hash(str) {
   let h = 2166136261
@@ -30,7 +34,7 @@ const FIRST_NAMES = ['Maya', 'Devin', 'Aisha', 'Carlos', 'Priya', 'Jordan', 'Tar
 export async function generateCreative({ settings, campaign, target, n = 2 }) {
   const product = PRODUCTS_BY_ID[campaign.product]
   const channel = CHANNELS_BY_ID[campaign.channels?.[0]] || CHANNELS_BY_ID['paid-search-rsa']
-  const targetText = describeTarget(target.segments, target.custom)
+  const targetText = briefOf(target)
   const segs = target.segments.map((id) => getSegment(id, target.custom)).filter(Boolean)
 
   if (hasKey(settings)) {
@@ -132,7 +136,7 @@ Return a JSON array of ${n} objects with keys: name (short label like "Variant A
 // =====================================================================
 export async function generatePersonas({ settings, target, distribution, n = 12 }) {
   const segs = target.segments.map((id) => getSegment(id, target.custom)).filter(Boolean)
-  const targetText = describeTarget(target.segments, target.custom)
+  const targetText = briefOf(target)
   const dist = distribution || { core: 0.6, adjacent: 0.25, skeptical: 0.15 }
 
   if (hasKey(settings)) {
@@ -295,7 +299,7 @@ export async function recommend({ settings, focusGroup, survey, variants, target
         temperature: 0.4,
         system: 'You are a marketing-science lead. Give a crisp, honest recommendation. Synthetic results are directional, not definitive — say so.',
         prompt: `Winner by preference share: ${winnerVar?.name} (${winner.prefShare}% vs runner-up ${ranked[1]?.prefShare ?? 0}%).
-Target: ${describeTarget(target.segments, target.custom)}
+Target: ${briefOf(target)}
 Focus-group per-variant: ${JSON.stringify(focusGroup?.perVariant || [])}
 Survey per-variant: ${JSON.stringify(survey.perVariant)}
 Return JSON: {"rationale": "...", "intersectionalFit": "how well the winner serves the combined target vs each component segment", "improvements": ["..."], "predictedPrefShare": ${winner.prefShare}, "confidence": "${confidence}"}`,
@@ -310,7 +314,7 @@ Return JSON: {"rationale": "...", "intersectionalFit": "how well the winner serv
     predictedPrefShare: winner.prefShare,
     confidence,
     rationale: `${winnerVar?.name} leads on predicted preference share (${winner.prefShare}%, a ${margin}-pt margin over the runner-up) and scores highest on combined sentiment, trust, and apply-intent. It speaks to the target's core motivation while keeping required terms clear.`,
-    intersectionalFit: `The winner serves the combined target ${describeTarget(target.segments, target.custom).split('.')[0]}. It is strongest with ${segmentBreakdown[0]?.segment}; watch ${segmentBreakdown[segmentBreakdown.length - 1]?.segment}, where the margin is thinner.`,
+    intersectionalFit: `The winner serves the combined target ${briefOf(target).split('.')[0]}. It is strongest with ${segmentBreakdown[0]?.segment}; watch ${segmentBreakdown[segmentBreakdown.length - 1]?.segment}, where the margin is thinner.`,
     improvements: [
       gaps.length ? `Close the comprehension gap on ${gaps[0].term}: ${gaps[0].issue}` : 'Tighten the value prop in the first line for paid-social truncation.',
       'Make the APR/fee disclosure even more prominent to lift trust among skeptical members.',

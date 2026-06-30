@@ -4,7 +4,7 @@ import { LENSES, SEGMENTS, segmentsByLens, describeTarget, getSegment, PRODUCT_S
 import { PRODUCTS_BY_ID } from '../data/products.js'
 import { screenCustomSegment, refusalRecord } from '../services/fairness.js'
 import { SectionTitle, Card, Badge, Modal, ComplianceBanner } from '../components/ui.jsx'
-import { Users, Check, Search, Plus, Sparkles, Save, FolderOpen, ShieldAlert, X } from 'lucide-react'
+import { Users, Check, Search, Plus, Sparkles, Save, FolderOpen, ShieldAlert, X, Pencil, RotateCcw, Wand2 } from 'lucide-react'
 
 export default function Step2Segment() {
   const { project, update, store, actions } = useProject()
@@ -12,6 +12,8 @@ export default function Step2Segment() {
   const productId = project.campaign.product
   const [query, setQuery] = useState('')
   const [customOpen, setCustomOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
 
   const affinity = PRODUCT_SEGMENT_AFFINITY[productId] || []
   const allSegments = useMemo(() => [...SEGMENTS, ...t.custom], [t.custom])
@@ -27,14 +29,18 @@ export default function Step2Segment() {
   }
 
   const combined = describeTarget(selected, t.custom)
+  const shownBrief = t.brief?.trim() || combined
   const profiles = store.libraries.targetingProfiles[productId] || []
 
+  const saveBrief = () => { update({ target: { ...t, brief: draft.trim() } }); setEditing(false) }
+  const resetBrief = () => { update({ target: { ...t, brief: '' } }); setEditing(false) }
+
   const saveProfile = () => {
-    const name = prompt('Name this targeting profile:', describeTarget(selected, t.custom).slice(0, 40))
+    const name = prompt('Name this targeting profile:', shownBrief.slice(0, 40))
     if (!name) return
-    actions.saveTargetingProfile(productId, { id: `tp-${Date.now()}`, name, segments: selected, custom: t.custom, description: combined })
+    actions.saveTargetingProfile(productId, { id: `tp-${Date.now()}`, name, segments: selected, custom: t.custom, brief: t.brief || '', description: shownBrief })
   }
-  const loadProfile = (p) => update({ target: { segments: p.segments, custom: p.custom || [] } })
+  const loadProfile = (p) => update({ target: { segments: p.segments, custom: p.custom || [], brief: p.brief || '' } })
 
   return (
     <div className="space-y-6">
@@ -54,17 +60,40 @@ export default function Step2Segment() {
         </Card>
       )}
 
-      {/* combined target render */}
+      {/* combined target render — editable */}
       <Card className="p-4">
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="label mb-1">Your target {selected.length > 1 && <Badge color="violet" className="ml-1">Intersectional · {selected.length} segments</Badge>}</div>
-            {selected.length ? <p className="text-sm text-ink-800 leading-relaxed">{combined}</p>
-              : <p className="text-sm text-ink-400">No segment selected yet. Choose one below — it drives personas, survey, and recommendation.</p>}
-            {selected.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2.5">
-                {selected.map((id) => { const s = getSegment(id, t.custom); return s ? <span key={id} className="chip bg-violet-100 text-violet-800">{s.name}<button onClick={() => toggle(id)} className="ml-0.5 hover:text-violet-950"><X size={11} /></button></span> : null })}
+          <div className="min-w-0 flex-1">
+            <div className="label mb-1 flex items-center gap-2">
+              Your target
+              {selected.length > 1 && <Badge color="violet">Intersectional · {selected.length} segments</Badge>}
+              {t.brief?.trim() && <Badge color="amber"><Pencil size={10} /> Edited</Badge>}
+            </div>
+
+            {!selected.length ? (
+              <p className="text-sm text-ink-400">No segment selected yet. Choose one below — it drives personas, survey, and recommendation.</p>
+            ) : editing ? (
+              <div className="space-y-2">
+                <textarea className="input min-h-[120px] resize-y text-sm leading-relaxed" value={draft} autoFocus
+                  onChange={(e) => setDraft(e.target.value)} placeholder="Describe your target audience in your own words…" />
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button className="btn-primary text-xs" onClick={saveBrief}><Check size={13} /> Save</button>
+                  <button className="btn-ghost text-xs" onClick={() => setEditing(false)}>Cancel</button>
+                  <button className="btn-subtle text-xs" onClick={() => setDraft(combined)} title="Replace with the auto-generated description"><Wand2 size={13} /> Regenerate from segments</button>
+                  <span className="text-[11px] text-ink-400 ml-auto">{draft.length} chars · this brief drives personas, creative, survey & recommendation</span>
+                </div>
               </div>
+            ) : (
+              <>
+                <p className="text-sm text-ink-800 leading-relaxed">{shownBrief}</p>
+                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  {selected.map((id) => { const s = getSegment(id, t.custom); return s ? <span key={id} className="chip bg-violet-100 text-violet-800">{s.name}<button onClick={() => toggle(id)} className="ml-0.5 hover:text-violet-950"><X size={11} /></button></span> : null })}
+                </div>
+                <div className="flex items-center gap-3 mt-2.5">
+                  <button className="text-xs font-medium text-brand-600 hover:text-brand-700 inline-flex items-center gap-1" onClick={() => { setDraft(shownBrief); setEditing(true) }}><Pencil size={12} /> Edit description</button>
+                  {t.brief?.trim() && <button className="text-xs text-ink-400 hover:text-ink-700 inline-flex items-center gap-1" onClick={resetBrief}><RotateCcw size={12} /> Reset to auto</button>}
+                </div>
+              </>
             )}
           </div>
           <div className="flex flex-col gap-2 shrink-0">

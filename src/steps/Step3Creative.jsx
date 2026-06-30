@@ -9,7 +9,7 @@ import { SectionTitle, Card, Badge, RiskBadge, Modal, SyntheticBanner } from '..
 import { useStagedGenerate, GenConsole, Stagger, ThinkingPill } from '../components/generate.jsx'
 import CreativePreview from '../components/CreativePreview.jsx'
 import { exportCSV, printReport } from '../utils/export.js'
-import { PenLine, Plus, Trash2, ShieldCheck, Wand2, Play, FileDown, AlertTriangle, CheckCircle2, Sliders, RotateCcw, PencilLine, Eye } from 'lucide-react'
+import { PenLine, Plus, Trash2, ShieldCheck, Wand2, Play, FileDown, AlertTriangle, CheckCircle2, Sliders, RotateCcw, PencilLine, Eye, ChevronRight } from 'lucide-react'
 
 const blankVariant = (channel) => ({ id: `var-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, name: 'New variant', channel, source: 'pasted', headline: '', primaryText: '', valueProp: '', landingCopy: '' })
 
@@ -144,43 +144,11 @@ export default function Step3Creative() {
               {highCount > 0
                 ? <Badge color="rose"><AlertTriangle size={13} /> {highCount} variant{highCount > 1 ? 's' : ''} with high-risk issues</Badge>
                 : <Badge color="emerald"><CheckCircle2 size={13} /> No high-risk issues detected</Badge>}
-              <span className="text-ink-400 text-xs">Reviewed {results.length} variants against the active rulepack.</span>
+              <span className="text-ink-400 text-xs">Reviewed {results.length} variants against the active rulepack. Click a variant to see why.</span>
             </div>
             {results.map((r, idx) => {
               const vv = variants.find((x) => x.id === r.variantId)
-              return (
-                <Stagger key={r.variantId} i={idx} className="rounded-lg border border-ink-100 p-3.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-ink-900 text-sm">{vv?.name}</span>
-                    <RiskBadge risk={r.risk} />
-                  </div>
-                  {r.findings.length === 0 ? (
-                    <p className="text-xs text-emerald-700 mt-2 flex items-center gap-1.5"><CheckCircle2 size={14} /> Passed all active rules.</p>
-                  ) : (
-                    <div className="mt-2.5 space-y-2">
-                      {r.findings.map((f, i) => {
-                        const cat = CATEGORY_META[f.category] || { label: f.category, color: 'ink' }
-                        return (
-                          <div key={i} className="rounded-md bg-ink-50 p-2.5">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge color={cat.color}>{cat.label}</Badge>
-                              <RiskBadge risk={f.severity} />
-                              <span className="text-sm font-medium text-ink-800">{f.name}</span>
-                              {f.matched && <span className="chip bg-rose-100 text-rose-700 font-mono">“{f.matched}”</span>}
-                              {f.status === 'missing' && <span className="chip bg-amber-100 text-amber-800">Disclosure missing</span>}
-                            </div>
-                            <p className="text-xs text-ink-600 mt-1.5">{f.rationale}</p>
-                            <div className="mt-1.5 flex items-start gap-2 text-xs">
-                              <span className="font-semibold text-emerald-700 shrink-0">Suggested fix:</span>
-                              <span className="text-ink-700 italic">{f.rewrite}</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </Stagger>
-              )
+              return <ComplianceResultRow key={r.variantId} index={idx} name={vv?.name} result={r} activeRules={activeRules} defaultOpen={idx === 0} />
             })}
           </div>
         )}
@@ -189,6 +157,84 @@ export default function Step3Creative() {
       <SyntheticBanner />
       <RulepackEditor open={rulepackOpen} onClose={() => setRulepackOpen(false)} />
     </div>
+  )
+}
+
+// Clickable per-variant compliance breakdown — shows BOTH why it cleared (rules
+// passed) and any issues, so a reviewer understands the verdict, not just the badge.
+function ComplianceResultRow({ name, result, activeRules, defaultOpen, index }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const failedIds = new Set(result.findings.map((f) => f.ruleId))
+  const passed = activeRules.filter((r) => !failedIds.has(r.id))
+  const issues = result.findings.length
+
+  return (
+    <Stagger i={index} className="rounded-lg border border-ink-100 overflow-hidden">
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between gap-3 p-3.5 text-left hover:bg-ink-50 transition">
+        <div className="flex items-center gap-2 min-w-0">
+          <ChevronRight size={15} className={`text-ink-400 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="font-semibold text-ink-900 text-sm truncate">{name}</span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-xs font-medium hidden sm:inline ${issues ? 'text-rose-700' : 'text-emerald-700'}`}>
+            {issues ? `${issues} issue${issues > 1 ? 's' : ''} to resolve` : `Cleared all ${passed.length} rules`}
+          </span>
+          <RiskBadge risk={result.risk} />
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-3.5 pb-3.5 pt-1 border-t border-ink-100 animate-fade-in space-y-3">
+          {/* Why it's compliant — rules cleared */}
+          {passed.length > 0 && (
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-700 mb-1.5 flex items-center gap-1"><ShieldCheck size={13} /> Why it’s compliant — {passed.length} rule{passed.length > 1 ? 's' : ''} cleared</div>
+              <div className="space-y-1.5">
+                {passed.map((r) => {
+                  const cat = CATEGORY_META[r.category] || { label: r.category, color: 'ink' }
+                  return (
+                    <div key={r.id} className="flex items-start gap-2 text-xs">
+                      <CheckCircle2 size={14} className="text-emerald-600 shrink-0 mt-0.5" />
+                      <span className="text-ink-600"><span className="font-medium text-ink-800">{r.name}</span> <Badge color={cat.color}>{cat.label}</Badge> — {r.rationale}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Why it's flagged — issues */}
+          {issues === 0 ? (
+            <p className="text-xs text-emerald-700 flex items-center gap-1.5"><CheckCircle2 size={14} /> No issues — this variant passed every active rule and is cleared for testing.</p>
+          ) : (
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-rose-700 mb-1.5 flex items-center gap-1"><AlertTriangle size={13} /> Why it’s flagged — {issues} issue{issues > 1 ? 's' : ''}</div>
+              <div className="space-y-2">
+                {result.findings.map((f, i) => {
+                  const cat = CATEGORY_META[f.category] || { label: f.category, color: 'ink' }
+                  return (
+                    <div key={i} className="rounded-md bg-ink-50 p-2.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge color={cat.color}>{cat.label}</Badge>
+                        <RiskBadge risk={f.severity} />
+                        <span className="text-sm font-medium text-ink-800">{f.name}</span>
+                        {f.matched && <span className="chip bg-rose-100 text-rose-700 font-mono">“{f.matched}”</span>}
+                        {f.status === 'missing' && <span className="chip bg-amber-100 text-amber-800">Disclosure missing</span>}
+                      </div>
+                      <p className="text-xs text-ink-600 mt-1.5">{f.rationale}</p>
+                      <div className="mt-1.5 flex items-start gap-2 text-xs">
+                        <span className="font-semibold text-emerald-700 shrink-0">Suggested fix:</span>
+                        <span className="text-ink-700 italic">{f.rewrite}</span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Stagger>
   )
 }
 

@@ -59,15 +59,25 @@ export function segmentsByLens(lensId) {
   return SEGMENTS.filter((s) => s.lens === lensId)
 }
 
-// Render a plain-language description of the (possibly intersectional) target.
+const _lc = (s) => (s || '').replace(/\.$/, '').toLowerCase()
+const _uniq = (arr) => Array.from(new Set(arr.filter(Boolean)))
+
+// Render a plain-language description of the (possibly intersectional) target,
+// weaving in motivations AND objections so it reflects the real tension to message against.
 export function describeTarget(segmentIds, customSegments = []) {
   const segs = segmentIds.map((id) => getSegment(id, customSegments)).filter(Boolean)
   if (segs.length === 0) return ''
-  if (segs.length === 1) return `${segs[0].name} — ${segs[0].descriptor.toLowerCase()}`
+  if (segs.length === 1) {
+    const s = segs[0]
+    const obj = (s.objections || [])[0]
+    return `${s.name} — ${_lc(s.descriptor)}. They are motivated by ${_lc(s.motivation)}${obj ? `, but ${_lc(obj)}` : ''}. Messaging and testing should speak directly to that motivation while addressing the objection head-on.`
+  }
   const names = segs.map((s) => s.name)
-  const motivations = segs.map((s) => s.motivation.replace(/\.$/, '').toLowerCase())
-  const last = names.pop()
-  return `A customer at the intersection of ${names.join(', ')} and ${last}. They are motivated by ${motivations.join('; ')}. Messaging, panel, survey, and recommendation must stay coherent with all of these at once.`
+  const motivations = _uniq(segs.map((s) => _lc(s.motivation)))
+  const objections = _uniq(segs.flatMap((s) => (s.objections || []).map(_lc)))
+  const last = names.slice(-1)[0]
+  const head = names.slice(0, -1).join(', ')
+  return `A customer at the intersection of ${head} and ${last}. They are motivated by ${motivations.join('; ')} — yet wary of ${objections.slice(0, 3).join('; ')}. The winning message has to honor every one of these motivations at once without tripping a single objection, and the panel, survey, and recommendation must stay coherent across all ${segs.length} segments simultaneously.`
 }
 
 // Product → most-relevant segment ids, surfaced at the top of Step 2.
