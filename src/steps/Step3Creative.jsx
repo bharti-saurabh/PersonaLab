@@ -19,6 +19,7 @@ export default function Step3Creative() {
   const variants = project.creative.variants
   const results = project.creative.screenResults
   const [rulepackOpen, setRulepackOpen] = useState(false)
+  const [count, setCount] = useState(Math.min(5, Math.max(2, variants.length || 3)))
   const gen = useStagedGenerate()
   const screen = useStagedGenerate()
 
@@ -56,7 +57,7 @@ export default function Step3Creative() {
         'Pre-screening for fair-lending risk…',
       ],
       work: async () => {
-        const g = await generateCreative({ settings, campaign: project.campaign, target: project.target, n: Math.max(2, variants.length || 2) })
+        const g = await generateCreative({ settings, campaign: project.campaign, target: project.target, n: count })
         const res = screenAll(g, activeRules, project.campaign.product)
         return { g, res }
       },
@@ -74,10 +75,21 @@ export default function Step3Creative() {
       <SectionTitle icon={PenLine} title="Creative & Compliance"
         subtitle="Paste 2–5 variants or generate compliant ones. Every variant is screened by the Compliance Engine before any testing."
         right={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5" title="How many creative variants to generate">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400 hidden sm:block">Variants</span>
+              <div className="flex items-center gap-0.5 rounded-lg bg-ink-100 p-0.5">
+                {[2, 3, 4, 5].map((nn) => (
+                  <button key={nn} onClick={() => setCount(nn)} disabled={gen.running}
+                    className={`h-8 w-8 rounded-md text-sm font-semibold transition ${count === nn ? 'bg-white text-brand-600 shadow-sm' : 'text-ink-500 hover:text-ink-700'}`}>
+                    {nn}
+                  </button>
+                ))}
+              </div>
+            </div>
             <button className="btn-ghost" onClick={() => setRulepackOpen(true)}><Sliders size={15} /> Rulepack</button>
             <button className="btn-accent" onClick={generate} disabled={gen.running}>
-              {gen.running ? <ThinkingPill label="Generating" /> : <><Wand2 size={15} /> {hasKey(settings) ? 'Generate creative' : 'Generate (demo)'}</>}
+              {gen.running ? <ThinkingPill label="Generating" /> : <><Wand2 size={15} /> {hasKey(settings) ? `Generate ${count}` : `Generate ${count} (demo)`}</>}
             </button>
           </div>
         } />

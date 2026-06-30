@@ -62,25 +62,66 @@ Return a JSON array of ${n} objects with keys: name (short label like "Variant A
     } catch (e) { /* fall back */ }
   }
 
-  // Deterministic fallback — angle-differentiated templates.
+  // Deterministic fallback — each variant takes a GENUINELY different angle,
+  // conditioned on the selected product + target segment so no two are alike.
+  const pname = product?.name || 'This card'
+  const segName = segs[0]?.name || 'your goals'
+  const segLower = segName.toLowerCase()
+  const motivation = (segs[0]?.motivation || 'real, everyday value').toLowerCase()
+  const objection = (segs[0]?.objections?.[0] || 'hidden fees').toLowerCase()
+  const tail = 'Variable APR 19.99%–29.99% based on creditworthiness; $0 annual fee. See terms.'
+
   const angles = [
-    { tag: 'Value', headline: `${product?.name}: $0 Annual Fee`, vp: 'Simple value with no hidden cost.' },
-    { tag: 'Trust', headline: `Build Credit, Clearly`, vp: 'Transparent terms, no surprises.' },
-    { tag: 'Aspiration', headline: `Your Credit, Leveled Up`, vp: 'A smarter start to your financial future.' },
-    { tag: 'Education', headline: `Credit Made Understandable`, vp: 'Know your APR, fees, and terms up front.' },
-    { tag: 'Rewards', headline: `Earn On Everyday Spend`, vp: 'Cash back where you actually spend.' },
+    {
+      tag: 'Clear Value',
+      headline: `${pname}: $0 Annual Fee`,
+      vp: 'Straightforward value — no hidden cost.',
+      body: `Built for ${segName}. Get ${motivation} with no annual fee and no surprises.`,
+      lead: `${pname} keeps it simple for ${segLower}: clear value, no hidden cost, and no annual fee.`,
+    },
+    {
+      tag: 'Trust & Transparency',
+      headline: `Know Every Term, Up Front`,
+      vp: 'Transparent terms — no fine-print surprises.',
+      body: `Worried about ${objection}? See your APR and fees clearly, before you apply.`,
+      lead: `No fine-print games. ${pname} shows your rate, fees, and terms before you decide — so ${objection} is never a surprise.`,
+    },
+    {
+      tag: 'Aspiration',
+      headline: `Your Credit, Leveled Up`,
+      vp: 'A smarter start to your financial future.',
+      body: `${segName} deserve momentum. Put ${motivation} to work toward where you’re headed.`,
+      lead: `Think bigger. ${pname} helps ${segLower} turn everyday spending into real progress.`,
+    },
+    {
+      tag: 'Everyday Rewards',
+      headline: `Earn On Everyday Spend`,
+      vp: 'Cash back where you actually spend.',
+      body: `Turn ${motivation} into rewards on the purchases ${segName} make every day.`,
+      lead: `${pname} rewards the spending you already do — groceries, gas, and more — for ${segLower}.`,
+    },
+    {
+      tag: 'Plain-Language Education',
+      headline: `Credit, Made Understandable`,
+      vp: 'Know your APR, fees, and terms up front.',
+      body: `New to this? We explain ${motivation} in plain language — including ${objection}.`,
+      lead: `${pname} is built to be understood. We walk ${segLower} through APR, fees, and terms in plain English.`,
+    },
   ]
-  const r = rng(hash(targetText + (product?.id || '')))
+  // Seed a stable starting angle from the brief, then step by 1 so every
+  // variant gets a distinct angle (for n up to the number of angles).
+  const r = rng(hash(targetText + (product?.id || '') + (campaign.objective || '')))
+  const start = Math.floor(r() * angles.length)
   return Array.from({ length: n }).map((_, i) => {
-    const a = angles[(i + Math.floor(r() * angles.length)) % angles.length]
+    const a = angles[(start + i) % angles.length]
     return {
       id: uid('var'),
       name: `Variant ${String.fromCharCode(65 + i)} — ${a.tag}`,
       channel: channel.id,
       headline: trunc(a.headline, fieldMax(channel, 'headline')),
-      primaryText: trunc(`Designed for ${segs[0]?.name || 'your goals'}. ${a.vp} Variable APR 19.99%–29.99% based on creditworthiness; $0 annual fee. See terms.`, fieldMax(channel, 'primaryText')),
+      primaryText: trunc(`${a.body} ${tail}`, fieldMax(channel, 'primaryText')),
       valueProp: trunc(a.vp, fieldMax(channel, 'valueProp')),
-      landingCopy: trunc(`${product?.name} is built for ${targetText.toLowerCase()} ${a.vp} No annual fee. Variable APR 19.99%–29.99% based on creditworthiness. See terms and conditions for full details. Pre-qualifying won’t affect your credit score.`, fieldMax(channel, 'landingCopy')),
+      landingCopy: trunc(`${a.lead} ${tail} Pre-qualifying won’t affect your credit score.`, fieldMax(channel, 'landingCopy')),
       source: 'generated',
     }
   })
