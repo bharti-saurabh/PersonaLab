@@ -19,7 +19,7 @@ No test runner or linter is configured. There is no backend — everything runs 
 
 ## Architecture (the big picture)
 
-The app is a single React tree over one global store. There is no router; navigation is a `currentStep` field on the active project.
+The app is a single React tree over one global store. There is no router. `App.jsx` holds a top-level `view` state (`'home' | 'pipeline'`) that defaults to **`'home'`**, so the app always opens on the educational landing page (`src/components/HomePage.jsx`) rather than dropping into a (seeded, fully-complete) project. "Start a new campaign" creates a fresh project and switches to `'pipeline'`; clicking the brand lockup in the pipeline `TopBar` returns to `'home'`. Within the pipeline, navigation is a `currentStep` field on the active project.
 
 - **State — `src/state/store.jsx`** is the single source of truth: a `useReducer` store persisted to `localStorage` (`persona-lab-state-v1`). The store holds `settings`, `projects[]`, `activeProjectId`, the editable `rulepack`, a global `auditLog`, and reusable `libraries` (targeting profiles + panels). On first run it seeds two complete example projects via `buildSeedState`.
   - `useProject()` is the primary hook every step uses: returns `{ project, update, settings, store, actions }`. `update(patch)` **deep-merges** into the active project (arrays are replaced wholesale — pass a full new array to change one).

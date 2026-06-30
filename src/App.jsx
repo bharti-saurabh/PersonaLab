@@ -3,6 +3,7 @@ import { useStore, useProject } from './state/store.jsx'
 import { STEPS, stepStatus, useNav } from './state/nav.js'
 import { hasKey } from './services/llm.js'
 import SettingsModal from './components/SettingsModal.jsx'
+import HomePage from './components/HomePage.jsx'
 import { Modal, Badge } from './components/ui.jsx'
 import {
   Settings, Plus, ChevronLeft, ChevronRight, Check, Lock,
@@ -40,15 +41,32 @@ function BrandMark({ size = 36 }) {
 }
 
 export default function App() {
-  const { state } = useStore()
+  const { state, actions } = useStore()
   const { project } = useProject()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // The app opens on the educational homepage; entering the pipeline is explicit.
+  const [view, setView] = useState('home')
 
-  if (!project) return <NoProject onSettings={() => setSettingsOpen(true)} settingsOpen={settingsOpen} setSettingsOpen={setSettingsOpen} />
+  const live = hasKey(state.settings)
+
+  if (view === 'home' || !project) {
+    return (
+      <>
+        <HomePage
+          projects={state.projects}
+          live={live}
+          onSettings={() => setSettingsOpen(true)}
+          onStart={(name) => { actions.createProject(name); setView('pipeline') }}
+          onOpen={(id) => { actions.selectProject(id); setView('pipeline') }}
+        />
+        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </>
+    )
+  }
 
   return (
     <div className="min-h-full flex flex-col">
-      <TopBar onSettings={() => setSettingsOpen(true)} live={hasKey(state.settings)} />
+      <TopBar onSettings={() => setSettingsOpen(true)} onHome={() => setView('home')} live={live} />
       <TopStepper />
       <main className="flex-1 min-w-0 w-full max-w-[1180px] mx-auto px-6 py-7">
         <StepHost />
@@ -67,11 +85,11 @@ function StepHost() {
 }
 
 // ---------------- Top Bar ----------------
-function TopBar({ onSettings, live }) {
+function TopBar({ onSettings, onHome, live }) {
   return (
     <header className="sticky top-0 z-30 bg-white/85 backdrop-blur-md border-b border-ink-200 no-print">
       <div className="max-w-[1180px] mx-auto px-6 h-16 flex items-center justify-between">
-        <BrandMark />
+        <button onClick={onHome} title="Back to home" className="rounded-lg hover:opacity-80 transition-opacity"><BrandMark /></button>
         <div className="flex items-center gap-2">
           <Badge color={live ? 'emerald' : 'amber'}>
             {live ? <><Sparkles size={12} /> Live LLM</> : 'Demo mode'}
@@ -220,22 +238,5 @@ function Footer() {
         </div>
       </div>
     </footer>
-  )
-}
-
-// ---------------- Empty (no project) ----------------
-function NoProject({ onSettings, settingsOpen, setSettingsOpen }) {
-  const { actions } = useStore()
-  return (
-    <div className="min-h-full grid place-items-center p-6">
-      <div className="card p-8 max-w-md text-center shadow-pop">
-        <img src={`${import.meta.env.BASE_URL}capone-logo.webp`} alt="Capital One" width={56} height={56} className="mx-auto mb-3" />
-        <div className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-accent-600">Capital One</div>
-        <h1 className="text-2xl font-extrabold mt-0.5">Persona Lab</h1>
-        <p className="text-sm text-ink-500 mt-1 mb-4">Compliance-first synthetic audience platform. No campaigns yet — create one to begin.</p>
-        <button className="btn-primary mx-auto" onClick={() => actions.createProject('New Campaign')}><Plus size={16} /> New campaign</button>
-      </div>
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-    </div>
   )
 }
