@@ -200,7 +200,8 @@ export async function runFocusGroup({ settings, personas, variants, campaign, op
         system: 'You are a professional market-research moderator running a REALISTIC, full-length synthetic focus group for a regulated credit-card issuer. Produce an actual moderated discussion transcript that reads like REAL PEOPLE TALKING — natural, conversational, human. Participants should hesitate, use filler ("honestly", "I mean", "yeah, but…"), think out loud, trail off, interrupt and build on each other ("like Maya said…", "I disagree with that"), tell tiny personal anecdotes, and sometimes change their mind mid-thought. Avoid clipped, report-style one-liners; let turns breathe (often 2-4 sentences) the way actual focus-group participants speak. The moderator opens warmly, sets ground rules, presents each concept, and actively moderates — asking open questions, follow-up probes, inviting quieter participants by name, reflecting back what people say, surfacing agreement and disagreement, checking comprehension of material terms, and closing with an apply-intent go-around. Personas speak in character (use their voice, archetype, and key objection). Paraphrase; never fabricate quotes attributed to real people. CRITICAL: when a persona misreads a material term (APR, fees, deposit, intro period), show the confusion in natural dialogue and have the moderator gently clarify — that misread is both a conversion risk and a compliance signal.',
         prompt: `Campaign: ${PRODUCTS_BY_ID[campaign.product]?.name}, objective ${campaign.objective}.
 Run the session as if it lasts about ${lengthMins} minutes. Group dynamics (agreement/pushback) enabled: ${gd}.
-Personas (every one must participate MULTIPLE times across the discussion): ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, objection: p.keyObjection })))}
+Personas (every one must participate MULTIPLE times across the discussion): ${JSON.stringify(sample.map((p) => ({ name: p.name, age: p.age, income: p.income, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, goals: p.goals, decisionStyle: p.decisionStyle, objection: p.keyObjection })))}
+CRITICAL on individuality: every persona must sound like a DIFFERENT human being. Vary each one's vocabulary, sentence length, fillers, and the specific thing they fixate on based on their own age, goals, decisionStyle, financial literacy, and key objection. Two participants must never phrase the same idea the same way, reuse the same opener, or repeat each other's wording — when they agree, they say so in their own words and reference the other person by name.
 Variants: ${JSON.stringify(variants.map((v) => ({ id: v.id, name: v.name, headline: v.headline, primaryText: v.primaryText, valueProp: v.valueProp })))}
 
 Return JSON: {
@@ -228,8 +229,9 @@ export async function steerFocusGroup({ settings, directive, personas, variants,
         system: 'You are the moderator of a synthetic focus group for a regulated credit-card issuer. The moderator is steering the live discussion in a new direction. First the moderator poses the steer to the room, then several personas respond in character (one after another, some agreeing, some pushing back). Paraphrase reactions; never fabricate quotes attributed to real people. Flag any misread material term (APR, fees, deposit, intro period).',
         prompt: `Moderator steer: "${directive}".
 Campaign: ${PRODUCTS_BY_ID[campaign.product]?.name || 'card'}, objective ${campaign.objective}.
-Personas: ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, objection: p.keyObjection })))}
+Personas: ${JSON.stringify(sample.map((p) => ({ name: p.name, age: p.age, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, goals: p.goals, decisionStyle: p.decisionStyle, objection: p.keyObjection })))}
 Variants: ${JSON.stringify(variants.map((v) => ({ id: v.id, name: v.name, headline: v.headline, valueProp: v.valueProp })))}
+Each persona must respond in their OWN distinct voice — different wording, length, and focus per their age/goals/decisionStyle/objection; never have two of them phrase it the same way.
 Return JSON: {"transcript":[{"role":"moderator"|"persona","speaker":<"Moderator" or persona name>,"variantId":<id or null>,"text":<1-2 sentences>,"intentLabel":<persona apply-intent only, else null>}]}
 Start with ONE moderator turn that frames the steer to the group, then 4-8 persona turns that directly engage it.`,
       })
@@ -864,88 +866,250 @@ function intentFor(p, v, base) {
   return s > 60 ? 'would apply' : s > 40 ? 'might apply' : 'would not apply'
 }
 
+// ---- Per-persona individuation so every participant sounds like a distinct human ----
+// Same-archetype personas used to share 2-3 canned lines and repeat each other. Now
+// each line is composed from a large fragment pool plus a clause drawn from THIS
+// persona's own attributes (goal, decision style, literacy, age, objection) and a
+// stable per-persona speech fingerprint, so no two participants talk alike.
+const FILLERS = ['honestly', 'I mean', 'look', 'okay so', 'see', "I'll be real", 'I guess', 'yeah, no', 'truthfully', 'alright', 'so', 'right']
+const HEDGES = ['kind of', 'sort of', 'a little', 'pretty much', 'more or less', 'basically', 'somewhat', 'I think']
+const SIGNOFFS = ["that's just me", 'if that makes sense', 'you know?', 'but who knows', "that's where I land", "for what it's worth", "I don't know", 'anyway', "that's my take", 'simple as that']
+
+// A stable speech fingerprint per persona — the same person always leans on the same
+// fillers / sign-off, but no two personas draw the exact same set.
+function voiceProfile(p) {
+  const r = rng(hash((p.id || p.name || 'x') + 'voice'))
+  return { f1: pick(FILLERS, r), f2: pick(FILLERS, r), hedge: pick(HEDGES, r), signoff: pick(SIGNOFFS, r) }
+}
+function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s }
+function vh(p, v, salt) { return hash((p.id || p.name || 'x') + (v?.id || '') + salt) }
+
+// A clause built from this persona's defining attributes so even same-archetype
+// personas say something different and in-character.
+function personaDetail(p, r) {
+  const goal = (p.goals || '').replace(/^focused on /i, '').replace(/^wants /i, '').toLowerCase()
+  const obj = (p.keyObjection || 'hidden fees').toLowerCase()
+  const style = (p.decisionStyle || '').toLowerCase()
+  const opts = []
+  if (goal) opts.push(`what I'm really after is ${goal}`)
+  if (/compare/.test(style)) opts.push(`I'd line this up against two or three other cards before I commit to anything`)
+  if (/every term|reads every/.test(style)) opts.push(`I'm the type who reads every line of the terms before signing`)
+  if (/gut|fast|decides fast/.test(style)) opts.push(`I tend to go on gut and a couple of reviews, then decide quick`)
+  if (/friend|family|asks/.test(style)) opts.push(`I'd run it past my family before I did anything`)
+  if (/trusted brand|trusts a/.test(style)) opts.push(`I lean toward names I already recognize`)
+  if (typeof p.age === 'number' && p.age < 28) opts.push(`I'm still early on building my credit, so this stuff matters more to me`)
+  else if (typeof p.age === 'number' && p.age >= 55) opts.push(`at my age I pretty much know what I want out of a card`)
+  if (p.financialLiteracy === 'low') opts.push(`some of the fine-print stuff goes over my head, I'll admit it`)
+  else if (p.financialLiteracy === 'high') opts.push(`I read these closely — I know what to look for`)
+  if (!opts.length) opts.push(`for me it always comes back to ${obj}`)
+  return pick(opts, r)
+}
+
+// Opening go-around — how each persona feels about credit-card offers generally.
+function introLine(p) {
+  const r = rng(vh(p, { id: 'intro' }, 'intro'))
+  const vo = voiceProfile(p)
+  const SK = [
+    `skeptical, mostly. I assume there's a catch until I see the fine print`,
+    `wary — I've been burned before, so my default is “what aren't they telling me?”`,
+    `I usually scroll right past them. They all sound the same and I don't trust the promises`,
+  ]
+  const CO = [
+    `I actually pay attention to these — I read more than I probably should`,
+    `pretty open, ${vo.hedge}. If the offer's good and clear, I'll read the whole thing`,
+    `interested, generally. I like comparing what's out there before I commit`,
+  ]
+  const AD = [
+    `depends on the offer. Most I ignore, but a good one gets me to read`,
+    `mixed — I don't seek them out, but I'll stop if the headline actually says something`,
+    `cautiously curious. I'll look, but it has to feel relevant to me`,
+  ]
+  const bank = p.archetype === 'skeptical' ? SK : p.archetype === 'core' ? CO : AD
+  return `${cap(vo.f1)}, ${pick(bank, r)}. ${cap(personaDetail(p, r))}.`
+}
+
 function impressionLine(p, v) {
+  const r = rng(vh(p, v, 'imp'))
+  const vo = voiceProfile(p)
   const vp = (v.valueProp || 'the offer').toLowerCase()
-  const A = {
-    core: [
-      `Okay, honestly? My first reaction's pretty positive. “${v.headline}” — that's clear, it's not trying to be cute about it. And ${vp} is basically the thing I actually care about, so yeah, you've got my attention.`,
-      `You know what, that's kind of refreshing. So many of these are all flash and no substance, but this one feels like it's actually telling me something real. I'd read more, for sure.`,
-      `Hmm. I like it more than I expected to, if I'm being real. It gets to ${vp} right away instead of burying it, and it kind of feels like it's for someone like me. That doesn't happen often.`,
-    ],
-    adjacent: [
-      `I mean… it's fine? The headline's clear enough, I'll give it that. But I've heard “${vp}” like a hundred times, so part of me is just like, okay, prove it. I'm curious but I'm not sold.`,
-      `My gut says “maybe.” It reads clean, no complaints there. I just — I'd want to know what's actually behind it before I let myself get excited, you know?`,
-      `It's not bad. It caught my eye, which honestly is more than most of them manage. But I'm holding off until I see the details, because a headline's the easy part.`,
-    ],
-    skeptical: [
-      `See, my very first thought is “okay, what's the catch.” Anything that leads with “${vp}” usually has a fee or a rate hiding in the fine print somewhere. I've been burned, so I read these sideways.`,
-      `Yeah, that's exactly the kind of line that makes me suspicious. “${v.headline}” sounds great — too great, almost. Nobody hands you something for nothing, that's just not how banks work.`,
-      `My guard goes straight up, I'm not gonna lie. I'm not saying it's a scam. I'm saying show me the fine print first, then show me the nice headline.`,
-    ],
-  }
-  return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'imp')))
+  const head = v.headline ? `“${v.headline}”` : 'that headline'
+  const POS = [
+    `my first reaction's actually pretty positive — ${head} is clear, it's not trying to be cute about it`,
+    `that one lands for me. It gets to ${vp} right away instead of burying it`,
+    `I like it more than I expected to, ${vo.hedge}. It feels like it's actually saying something`,
+    `that's refreshing — ${vp} is basically the thing I care about, so you've got my attention`,
+    `yeah, that catches me. ${head} reads clean and it feels like it's meant for someone like me`,
+    `first impression's good. There's something real underneath ${head}, not just flash`,
+  ]
+  const NEU = [
+    `it's fine, ${vo.hedge}? ${head} is clear enough, but I've heard ${vp} a hundred times`,
+    `my gut says maybe. It reads clean, I just want to know what's actually behind it`,
+    `it's not bad — it caught my eye, which honestly is more than most of them manage`,
+    `I'm on the fence. ${head} is doing its job, but a headline's the easy part`,
+    `${vp} sounds nice, sure. I just need it to feel real before I get excited`,
+    `eh, it's okay. Nothing wrong with it, nothing that grabs me by the collar either`,
+  ]
+  const NEG = [
+    `my first thought is, okay, what's the catch — anything leading with ${vp} usually hides a fee`,
+    `that's exactly the kind of line that makes me suspicious. ${head} sounds almost too good`,
+    `my guard goes straight up. I'm not saying it's a scam, I'm saying show me the fine print first`,
+    `I read these sideways. ${head} is the nice part; I want to see what's underneath it`,
+    `that pitch puts me on alert. ${vp} is easy to say and hard to actually prove`,
+    `nope — I've been burned before. ${head} is doing a lot of work to not tell me the cost`,
+  ]
+  const bank = p.archetype === 'core' ? POS : p.archetype === 'skeptical' ? NEG : NEU
+  return `${cap(vo.f1)}, ${pick(bank, r)}. ${cap(personaDetail(p, r))}.`
 }
 function trustLine(p, v) {
+  const r = rng(vh(p, v, 'trust'))
+  const vo = voiceProfile(p)
   const obj = (p.keyObjection || 'hidden fees').toLowerCase()
   const benefit = (v.valueProp || 'the benefit').toLowerCase()
-  const A = {
-    core: [`Do I believe it? Yeah, mostly. It's Capital One, it's not some name I've never heard of, so I'll give it the benefit of the doubt and read the terms as I go.`,
-      `It doesn't set off any alarm bells for me, honestly. I'd trust it enough to actually start the application and check the details along the way.`],
-    adjacent: [`I half-believe it, if I'm being real. Like, “${benefit}” is doing a lot of heavy lifting in that one sentence. What's the trade-off? There's always a trade-off somewhere.`,
-      `I want to believe it. But I'd need to see the actual numbers — the rate, the fees, all of it — before I fully buy in. Words are cheap, right?`],
-    skeptical: [`No. Not at face value, no way. There's always something — a fee that kicks in, a rate that jumps after a few months. My whole thing is ${obj}, and until somebody actually addresses that, I'm out.`,
-      `See, this is what I'm talking about. It sounds too good to be true, so I just assume it is until it's proven otherwise. Call me cynical, I've earned it.`,
-      `Honestly my objection's pretty simple — it's ${obj}. That's the first thing I'd be looking for, and I don't see it answered here, so I'm skeptical.`],
-  }
-  return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'trust')))
+  const POS = [
+    `do I believe it? Yeah, mostly — it's Capital One, not some name I've never heard of, so I'll give it a fair read`,
+    `it doesn't set off alarm bells for me. I'd trust it enough to start the application and check the terms as I go`,
+    `I'm inclined to believe it, ${vo.hedge}. Nothing here feels like a bait-and-switch`,
+  ]
+  const NEU = [
+    `I half-believe it. “${benefit}” is doing a lot of heavy lifting in one sentence — what's the trade-off?`,
+    `I want to believe it, but I'd need the actual numbers — the rate, the fees — before I fully buy in`,
+    `it's believable enough, ${vo.hedge}. I just don't take any of these at face value anymore`,
+  ]
+  const NEG = [
+    `no. Not at face value. There's always something — a fee that kicks in, a rate that jumps. My whole thing is ${obj}`,
+    `it sounds too good to be true, so I assume it is until it's proven. Call me cynical, I've earned it`,
+    `my objection's simple — it's ${obj}, and I don't see it answered here, so I stay skeptical`,
+  ]
+  const bank = p.archetype === 'core' ? POS : p.archetype === 'skeptical' ? NEG : NEU
+  return `${cap(vo.f2)}, ${pick(bank, r)}. ${cap(personaDetail(p, r))}.`
 }
 function compLine(p, v, misread) {
+  const r = rng(vh(p, v, 'comp'))
+  const vo = voiceProfile(p)
   if (misread) {
-    return p.financialLiteracy === 'low'
-      ? `Wait, hold on — so the zero percent, that's just… forever, right? Once I've got the card the rate stays low? …No? Okay, see, that's not jumping out at me at all, I totally read it as permanent.`
-      : `Hmm, let me make sure I've got this. Does the rate go up to something higher after the intro thing, or is the low one the regular rate? Honestly, reading it quick, I'm not a hundred percent sure.`
+    const low = [
+      `wait, hold on — so the zero percent, that's just… forever, right? Once I've got the card the rate stays low? …No? See, that didn't jump out at me at all`,
+      `okay I'll be honest, I read that as the low rate being the normal rate — the intro thing didn't register for me`,
+      `so the rate never changes? That's how I took it. ${cap(vo.signoff)}`,
+    ]
+    const mid = [
+      `let me make sure I've got this — does the rate jump to something higher after the intro, or is the low one the regular rate? Reading it quick, I'm not a hundred percent sure`,
+      `hmm, the intro period throws me a little. After it ends, what am I actually paying? I'd have to re-read that`,
+      `I think there's a catch in the timing, but I couldn't tell you the exact go-to rate from this`,
+    ]
+    return `${cap(pick(p.financialLiteracy === 'low' ? low : mid, r))}.`
   }
-  return p.financialLiteracy === 'high'
-    ? `For me it's pretty clear — there's an intro period, then it moves to a variable go-to APR based on your credit, and the fee is whatever they state. That part I follow fine.`
-    : `I think I get the gist? There's an intro period and then a normal rate, and I'd definitely double-check the fee before signing up. But yeah, roughly, I'm with it.`
+  const clear = [
+    `for me it's clear enough — there's an intro period, then a variable go-to APR based on your credit, and the fee's whatever they state`,
+    `I follow it: intro rate, then it moves to the normal variable rate, and I'd check the fee before signing`,
+    `that part I get — the low rate is temporary and the real rate kicks in after. ${cap(vo.signoff)}`,
+  ]
+  return `${cap(pick(clear, r))}.`
 }
 function objectionLine(p, v) {
+  const r = rng(vh(p, v, 'obj'))
+  const vo = voiceProfile(p)
   const obj = (p.keyObjection || 'hidden fees').toLowerCase()
   const benefit = (v.valueProp || 'the benefit').toLowerCase()
-  const A = {
-    core: [`Honestly, the only thing that'd stop me is if I dug into the terms and found ${obj} was actually true. Short of that, I'm pretty much there.`,
-      `Not a ton of hesitation for me, to be honest. Maybe just confirming there's no surprise fee waiting, and then I'm comfortable.`],
-    adjacent: [`What holds me back is ${obj}, plain and simple. Clear that one thing up for me and I'm probably in.`,
-      `I'd hesitate until I could actually see how “${benefit}” pays off for me specifically. Like — what's in it for my situation, not just in general?`],
-    skeptical: [`My hesitation? Honestly, all of it. ${obj}, what the rate does after the intro, whether the rewards have some cap buried in there — I'd want every bit of that spelled out before I'd touch it.`,
-      `I'm not applying until somebody shows me there's no penalty hiding in here. ${obj} — that's my line, and I don't cross it on a promise.`],
-  }
-  return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'obj')))
+  const POS = [
+    `the only thing that'd stop me is if I dug into the terms and found ${obj} was actually true`,
+    `not a ton of hesitation for me — maybe just confirming there's no surprise fee, then I'm comfortable`,
+    `I'm most of the way there; clear up ${obj} and I'd start the application`,
+  ]
+  const NEU = [
+    `what holds me back is ${obj}, plain and simple. Clear that one thing up and I'm probably in`,
+    `I'd hesitate until I could see how “${benefit}” actually pays off for my situation specifically`,
+    `my pause is ${obj} — show me that's handled and you've got me`,
+  ]
+  const NEG = [
+    `my hesitation? ${obj}, what the rate does after the intro, whether the rewards have a cap — all of it spelled out first`,
+    `I'm not applying until somebody shows me there's no penalty hiding in here. ${obj} is my line`,
+    `everything gives me pause, ${vo.hedge}. ${cap(obj)} is just the first thing I'd hunt for`,
+  ]
+  const bank = p.archetype === 'core' ? POS : p.archetype === 'skeptical' ? NEG : NEU
+  return `${cap(vo.f1)}, ${pick(bank, r)}.`
 }
 function intentLineText(p, v, label) {
-  if (label === 'would apply') return `Yeah, for me it's a “probably.” I'd apply, assuming the terms actually match the pitch — and the one thing that'd push me to a “definitely” is just seeing the fees laid out plainly up front.`
-  if (label === 'would not apply') return `Honestly? “Probably not,” for me. I'd need a much clearer guarantee on the fees before I'd move on it — right now there's too much I'm guessing at.`
-  return `I'm a solid “maybe.” I'm genuinely interested, I am, but I'd want to put it side by side with my current card first before I commit to anything.`
+  const r = rng(vh(p, v, 'int'))
+  const vo = voiceProfile(p)
+  const obj = (p.keyObjection || 'the fees').toLowerCase()
+  if (label === 'would apply') {
+    return cap(pick([
+      `for me it's a “probably.” I'd apply if the terms match the pitch — seeing ${obj} laid out plainly is what'd make it a “definitely”`,
+      `I'm a yes, leaning strong. The thing that'd lock it in is a clear line on ${obj} up front`,
+      `probably applying — ${vo.signoff}. Just put the real numbers next to the promise and I'm there`,
+    ], r)) + '.'
+  }
+  if (label === 'would not apply') {
+    return cap(pick([
+      `honestly? “Probably not” for me. I'd need a much clearer guarantee on ${obj} before I'd move`,
+      `I'm a no for now. Too much I'm guessing at, especially around ${obj}`,
+      `not yet. Clear up ${obj} and ask me again, but as it stands I'd pass`,
+    ], r)) + '.'
+  }
+  return cap(pick([
+    `I'm a solid “maybe.” Genuinely interested, but I'd put it side by side with my current card first`,
+    `call it a maybe. I'd want ${obj} resolved before I commit either way`,
+    `on the fence. The idea's good; I just need a bit more proof before I'd apply`,
+  ], r)) + '.'
 }
 // A coherent reaction to another participant — stance matches the speaker's own archetype.
 function crossTalkLine(a, otherName, v) {
+  const r = rng(vh(a, v, 'ct' + otherName))
   const benefit = (v.valueProp || 'the benefit').toLowerCase()
   const obj = (a.keyObjection || 'the fees').toLowerCase()
-  const banks = {
-    skeptical: [
-      `See, I hear ${otherName}, I do — but I'm not there. They're looking at the upside; I'm still stuck on what's not being said about ${obj}.`,
-      `Respectfully, I've gotta push back on ${otherName} a bit. It's easy to like the headline. I just don't trust it until the fine print backs it up.`,
-    ],
-    core: [
-      `Yeah, honestly I'm with ${otherName} on this one. Same gut reaction — it feels straight with me, and that counts for a lot these days.`,
-      `No, ${otherName} kind of nailed it for me too. I'd rather have something clear like this than a flashier pitch I can't actually trust.`,
-    ],
-    adjacent: [
-      `I'm sort of half-and-half with ${otherName}. I get the appeal, I really do — I just want to see how “${benefit}” plays out for me before I land anywhere.`,
-      `I see what ${otherName} means, but I'm more on the fence than that. It's promising, sure — but “promising” and “proven” aren't the same thing, are they?`,
-    ],
-  }
-  return pick(banks[a.archetype] || banks.adjacent, rng(hash(a.id + v.id + 'ct')))
+  const SK = [
+    `see, I hear ${otherName}, I do — but I'm not there. They're looking at the upside; I'm stuck on what's not being said about ${obj}`,
+    `respectfully, I've gotta push back on ${otherName}. It's easy to like the headline — I don't trust it until the fine print backs it up`,
+    `${otherName} is more optimistic than me. I've been burned, so I'd need ${obj} answered before I'd nod along`,
+  ]
+  const CO = [
+    `yeah, I'm with ${otherName} on this one. Same gut reaction — it feels straight with me, and that counts for a lot`,
+    `${otherName} kind of nailed it for me too. I'd rather have something clear like this than a flashier pitch I can't trust`,
+    `no, I'm right there with ${otherName}. It reads honest, and these days that's most of the battle`,
+  ]
+  const AD = [
+    `I'm half-and-half with ${otherName}. I get the appeal, I do — I just want to see how “${benefit}” plays out for me first`,
+    `I see what ${otherName} means, but I'm more on the fence. “Promising” and “proven” aren't the same thing`,
+    `somewhere between ${otherName} and totally sold. The idea's good; I need a little more before I'd land`,
+  ]
+  const bank = a.archetype === 'skeptical' ? SK : a.archetype === 'core' ? CO : AD
+  return cap(pick(bank, r))
+}
+// What single change would move this persona from "no/maybe" to "yes" (long sessions).
+function moveToYesLine(p, v) {
+  const r = rng(vh(p, v, 'yes'))
+  const obj = (p.keyObjection || 'the fees').toLowerCase()
+  const benefit = (v.valueProp || 'the benefit').toLowerCase()
+  const SK = [
+    `put the actual numbers right next to the promise — show me ${obj} can't bite me, and I'd reconsider`,
+    `one honest line about ${obj}, no asterisk, and I'd move from a no to a maybe`,
+  ]
+  const CO = [
+    `honestly not much — a line confirming there's no surprise on ${obj} and I'm in`,
+    `just reassure me on ${obj} and you've turned my maybe into a yes`,
+  ]
+  const AD = [
+    `if it spelled out exactly how “${benefit}” applies to someone like me, that'd tip me over`,
+    `show me the math on “${benefit}” for my situation and I'd lean yes`,
+  ]
+  const bank = p.archetype === 'skeptical' ? SK : p.archetype === 'core' ? CO : AD
+  return cap(pick(bank, r))
+}
+// Head-to-head choice line in the comparison round.
+function compareChoiceLine(p, v) {
+  const r = rng(vh(p, v, 'cmp2'))
+  const SK = [
+    `if you're making me choose… “${v.name},” I guess. Only because it felt a little less like it was hiding something`,
+    `“${v.name}” — and that's faint praise. It just tripped fewer of my alarms`,
+  ]
+  const OTHER = [
+    `“${v.name}” for me, no real contest. It actually felt like it was talking to my situation`,
+    `I'd go “${v.name}.” It was clearer about what I'd actually get`,
+    `“${v.name}.” The other one kind of washed over me; this one stuck`,
+  ]
+  const bank = p.archetype === 'skeptical' ? SK : OTHER
+  return `${cap(pick(bank, r))}.`
 }
 
 const MOD = {
@@ -961,9 +1125,6 @@ const MOD = {
   disagree: (other) => `See, I'd push back on ${other} a little, respectfully. I don't think it's as clear-cut as that. `,
   transition: `That's really helpful, all of it — thank you. Alright, let's switch gears and look at the next one.`,
   compare: `Okay, last big one. Now that you've seen both of them side by side, I want to go around the room — which one actually speaks to you more, and be honest about why. Don't overthink it, just gut.`,
-  compareLine: (p, v) => p.archetype === 'skeptical'
-    ? `If you're making me choose… I guess “${v.name}.” And only because it felt a little less like it was hiding something. Faint praise, I know.`
-    : `“${v.name}” for me, no real contest. It just felt like it was actually talking to my situation, where the other one kind of washed over me.`,
   closeAsk: `Alright, last thing and then I'll let you all go — I promise. Quick go-around: on a scale from “definitely not” to “definitely,” how likely are you, realistically, to actually apply? And give me the one thing that would bump you up a notch.`,
   close: `That is genuinely, genuinely useful — every bit of it. Thank you all so much for your time and your honesty today. Really.`,
 }
@@ -1002,30 +1163,9 @@ export function buildModeratedTranscript({ personas, variants, campaign = {}, pe
   // --- OPENING ---
   push('moderator', 'Moderator', MOD.open(cast.length, prod), { phase: 'Opening' })
   const introCast = long ? cast : cast.slice(0, Math.min(cast.length, 4))
-  const INTRO = {
-    skeptical: [
-      `Honestly? Skeptical. I assume there's a catch until I see the fine print.`,
-      `Wary — I've been burned before, so my default is "what aren't they telling me?"`,
-      `I usually scroll right past them. They all sound the same and I don't trust the promises.`,
-    ],
-    core: [
-      (p) => `I actually pay attention to them — I'm always looking for ${(p.goals || 'a better deal').toLowerCase()}.`,
-      () => `Pretty open, honestly. If the offer's good and clear, I'll read the whole thing.`,
-      () => `Interested, generally. I like comparing what's out there before I commit.`,
-    ],
-    adjacent: [
-      `Depends on the offer. Most I ignore, but a good one will get me to read.`,
-      `Mixed — I don't seek them out, but I'll stop if the headline actually says something.`,
-      `Cautiously curious. I'll look, but I need it to feel relevant to me.`,
-    ],
-  }
-  const introSeen = {}
   introCast.forEach((p, i) => {
     if (i === 0) push('moderator', 'Moderator', MOD.introInvite(fn(p)), { phase: 'Opening' })
-    const bank = INTRO[p.archetype] || INTRO.adjacent
-    const k = (introSeen[p.archetype] = (introSeen[p.archetype] ?? -1) + 1)
-    const entry = bank[k % bank.length]
-    push('persona', p.name, typeof entry === 'function' ? entry(p) : entry, { phase: 'Opening' })
+    push('persona', p.name, introLine(p), { phase: 'Opening' })
   })
 
   // --- PER-VARIANT DISCUSSION ---
@@ -1073,13 +1213,7 @@ export function buildModeratedTranscript({ personas, variants, campaign = {}, pe
     if (long) {
       push('moderator', 'Moderator', `Say I could fix one thing. What's the single change that would move you from a "no" or a "maybe" to a "yes"?`, { variantId: v.id, phase: `${phaseTag} · Objections` })
       cast.slice(0, 4).forEach((p) => {
-        const obj = (p.keyObjection || 'the fees').toLowerCase()
-        const line = p.archetype === 'skeptical'
-          ? `Put the actual numbers right next to the promise — show me ${obj} can't bite me, and I'd reconsider.`
-          : p.archetype === 'core'
-            ? `Honestly not much — maybe just a line confirming there's no surprise on ${obj} and I'm in.`
-            : `If it spelled out exactly how "${(v.valueProp || 'the benefit').toLowerCase()}" applies to someone like me, that'd tip me over.`
-        push('persona', p.name, line, { variantId: v.id, phase: `${phaseTag} · Objections` })
+        push('persona', p.name, moveToYesLine(p, v), { variantId: v.id, phase: `${phaseTag} · Objections` })
       })
     }
 
@@ -1093,7 +1227,7 @@ export function buildModeratedTranscript({ personas, variants, campaign = {}, pe
     compareCast.forEach((p) => {
       const r = rng(hash(p.id + 'cmp'))
       const choice = variants[Math.floor(r() * variants.length)]
-      push('persona', p.name, MOD.compareLine(p, choice), { variantId: choice.id, phase: 'Comparison' })
+      push('persona', p.name, compareChoiceLine(p, choice), { variantId: choice.id, phase: 'Comparison' })
     })
   }
 

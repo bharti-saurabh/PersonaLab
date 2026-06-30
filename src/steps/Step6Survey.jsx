@@ -3,7 +3,7 @@ import { useProject } from '../state/store.jsx'
 import { buildSurvey, regenerateSurvey, fieldSurvey, sampleAudience } from '../services/generators.js'
 import { hasKey } from '../services/llm.js'
 import { getSegment } from '../data/segments.js'
-import { SectionTitle, Card, Badge, StatCard, SyntheticBanner, EmptyState } from '../components/ui.jsx'
+import { SectionTitle, Card, Badge, StatCard, SyntheticBanner, EmptyState, Modal } from '../components/ui.jsx'
 import { useStagedGenerate, GenConsole, Stagger, ThinkingPill } from '../components/generate.jsx'
 import { PALETTE } from '../components/charts.jsx'
 import { exportCSV, exportJSON, exportSurveyCSV, printReport } from '../utils/export.js'
@@ -102,6 +102,7 @@ export default function Step6Survey() {
   const field = useStagedGenerate()
   const [comments, setComments] = useState('')
   const [audTab, setAudTab] = useState('split')
+  const [personaModal, setPersonaModal] = useState(null)
   const surveySize = project.panel.surveySize ?? 250
   const audience = useMemo(
     () => sampleAudience({ target: project.target, variants, n: surveySize, distribution: project.panel.distribution, previewCount: 8 }),
@@ -124,6 +125,15 @@ export default function Step6Survey() {
       </div>
     )
   }
+
+  // ----- respondents to preview -----
+  // Prefer the ACTUAL personas generated in Step 4 (rich, individual profiles — the
+  // same people who sat in the focus group), assigning each to one variant cell
+  // (between-subjects). Fall back to a lightweight synthetic sample if none exist yet.
+  const panelPersonas = project.panel?.personas || []
+  const respondents = panelPersonas.length
+    ? panelPersonas.map((p, i) => ({ ...p, assignedVariantId: variants[i % variants.length].id, assignedVariantName: variants[i % variants.length].name }))
+    : audience.sample
 
   // ----- focus-group connective tissue (what the questions are built from) -----
   const fgThemes = [...new Set((fg?.perVariant || []).flatMap((v) => v.themes || []))].filter(Boolean)
@@ -410,26 +420,33 @@ export default function Step6Survey() {
             </div>
           ) : (
             <div>
-              <p className="text-[11px] text-ink-400 mb-3">A representative sample of the {audience.total} synthetic respondents — each tagged with the one variant it's assigned. Illustrative profiles, not real people.</p>
+              <p className="text-[11px] text-ink-400 mb-3">
+                {panelPersonas.length
+                  ? <>The {panelPersonas.length} personas generated for this campaign — the same synthetic people who sat in your focus group. <b>Click any card</b> for the full profile. Each is tagged with the variant it's assigned in this between-subjects test.</>
+                  : <>A representative sample of the {audience.total} synthetic respondents — each tagged with the one variant it's assigned. Generate personas in Step 4 to inspect full individual profiles. Illustrative, not real people.</>}
+              </p>
               <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {audience.sample.map((p, i) => {
+                {respondents.map((p, i) => {
                   const vi = variants.findIndex((v) => v.id === p.assignedVariantId)
                   return (
-                    <Stagger key={p.id} i={i} className="rounded-lg border border-ink-100 p-3">
-                      <div className="flex items-center gap-2">
-                        <span className="grid place-items-center h-8 w-8 rounded-full bg-ink-100 text-ink-500"><UserCircle2 size={18} /></span>
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-ink-900 truncate">{p.name}</div>
-                          <div className="text-[11px] text-ink-400">{p.age} · {p.income}</div>
+                    <Stagger key={p.id} i={i} className="rounded-lg border border-ink-100 hover:border-brand-200 hover:shadow-card transition-all">
+                      <button type="button" onClick={() => setPersonaModal(p)} className="block w-full text-left p-3">
+                        <div className="flex items-center gap-2">
+                          <span className="grid place-items-center h-8 w-8 rounded-full bg-ink-100 text-ink-500"><UserCircle2 size={18} /></span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-ink-900 truncate">{p.name}</div>
+                            <div className="text-[11px] text-ink-400">{p.age} · {p.income}{p.archetype ? <span className="capitalize"> · {p.archetype}</span> : null}</div>
+                          </div>
                         </div>
-                      </div>
-                      <p className="text-[11px] text-ink-600 mt-2 leading-snug">{p.profile}</p>
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <span className="chip bg-ink-50 text-ink-500 text-[10px] capitalize">{p.financialLiteracy} literacy</span>
-                        <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold text-white shrink-0" style={{ background: PALETTE[(vi < 0 ? 0 : vi) % PALETTE.length] }}>
-                          <Eye size={11} /> {p.assignedVariantName}
-                        </span>
-                      </div>
+                        <p className="text-[11px] text-ink-600 mt-2 leading-snug">{p.segmentFit || p.profile || p.goals}</p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <span className="chip bg-ink-50 text-ink-500 text-[10px] capitalize">{p.financialLiteracy} literacy</span>
+                          <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold text-white shrink-0" style={{ background: PALETTE[(vi < 0 ? 0 : vi) % PALETTE.length] }}>
+                            <Eye size={11} /> {p.assignedVariantName}
+                          </span>
+                        </div>
+                        <span className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-brand-600"><UserCircle2 size={12} /> View full profile</span>
+                      </button>
                     </Stagger>
                   )
                 })}
@@ -557,7 +574,58 @@ export default function Step6Survey() {
         </Card>
       )}
 
+      <Modal open={!!personaModal} onClose={() => setPersonaModal(null)} title="Respondent profile" wide>
+        {personaModal && <PersonaDossier p={personaModal} variants={variants} />}
+      </Modal>
+
       <SyntheticBanner />
+    </div>
+  )
+}
+
+// ---- full persona dossier shown in the respondent modal ----
+function PersonaDossier({ p, variants }) {
+  const vi = variants.findIndex((v) => v.id === p.assignedVariantId)
+  const cap = (s) => (s ? `${s[0].toUpperCase()}${s.slice(1)}` : s)
+  const archColor = { core: 'emerald', adjacent: 'sky', skeptical: 'amber' }[p.archetype] || 'ink'
+  const wide = new Set(['Goals', 'How they talk', 'Segment fit', 'Decision style'])
+  const rows = [
+    ['Age', p.age],
+    ['Income', p.income],
+    ['Financial literacy', cap(p.financialLiteracy)],
+    ['Media habits', p.mediaHabits],
+    ['Decision style', p.decisionStyle],
+    ['Key objection', p.keyObjection],
+    ['Goals', p.goals],
+    ['How they talk', p.voice],
+    ['Segment fit', p.segmentFit || p.profile],
+  ].filter(([, v]) => v != null && v !== '')
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <span className="grid place-items-center h-12 w-12 rounded-full bg-brand-50 text-brand-600"><UserCircle2 size={26} /></span>
+        <div className="min-w-0">
+          <div className="text-base font-bold text-ink-900">{p.name}</div>
+          <div className="mt-1 flex items-center gap-2 flex-wrap">
+            {p.archetype && <Badge color={archColor}>{cap(p.archetype)} member</Badge>}
+            {p.segment && <span className="chip bg-ink-50 text-ink-600">{p.segment}</span>}
+            {p.assignedVariantName && (
+              <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold text-white" style={{ background: PALETTE[(vi < 0 ? 0 : vi) % PALETTE.length] }}>
+                <Eye size={11} /> Sees {p.assignedVariantName}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
+        {rows.map(([k, v]) => (
+          <div key={k} className={wide.has(k) ? 'sm:col-span-2' : ''}>
+            <dt className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">{k}</dt>
+            <dd className="text-sm text-ink-800 mt-0.5">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-[11px] text-ink-400 border-t border-ink-100 pt-3">Synthetic persona — a directional, illustrative profile generated for this campaign, not a real person.</p>
     </div>
   )
 }
