@@ -301,23 +301,265 @@ function syntheticSteer({ directive, personas, variants, campaign }) {
 
 // =====================================================================
 // SURVEY BUILDER + FIELDING (Step 6)
+// Every question traces back to a focus-group insight (theme / objection /
+// material-term comprehension gap), and the fielded outcome is a real per-question
+// response distribution computed from the focus-group signal — not random insight.
 // =====================================================================
-export async function buildSurvey({ settings, focusGroup, variants }) {
+
+// Pull the connective tissue out of the focus group so questions can cite it.
+function focusInsights(focusGroup) {
+  const pv = focusGroup?.perVariant || []
+  const themes = [...new Set(pv.flatMap((v) => v.themes || []))].filter(Boolean)
+  const objections = [...new Set(pv.flatMap((v) => v.objections || []))].filter(Boolean)
+  const gaps = pv.flatMap((v) => (v.comprehensionGaps || []).map((g) => ({ ...g, variantId: v.variantId })))
+  return { themes, objections, gaps, hasFocus: pv.length > 0 }
+}
+
+function normalizeQuestion(q, i) {
+  const type = ['likert', 'comprehension', 'maxdiff', 'intent', 'open', 'rating'].includes(q.type) ? q.type : 'likert'
+  const out = { id: q.id || `q-${i + 1}-${hash((q.text || '') + i) % 9999}`, type, text: q.text || '(untitled question)' }
+  if (type === 'likert' || type === 'intent' || type === 'rating') {
+    out.scale = Array.isArray(q.scale) && q.scale.length
+      ? q.scale
+      : (type === 'intent' ? ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'] : ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'])
+  }
+  if (type === 'comprehension') { out.options = Array.isArray(q.options) ? q.options : []; out.correctIndex = Number.isInteger(q.correctIndex) ? q.correctIndex : 0 }
+  if (type === 'maxdiff') out.options = Array.isArray(q.options) ? q.options : []
+  out.source = q.source && typeof q.source === 'object'
+    ? { kind: q.source.kind || 'theme', label: q.source.label || 'Focus-group insight', term: q.source.term }
+    : { kind: 'baseline', label: 'General creative diagnostic' }
+  return out
+}
+
+// Deterministic instrument derived straight from the focus-group insights.
+function surveyFromFocus(ins, variants) {
+  const topTheme = ins.themes[0] || 'Clarity of the value proposition'
+  const trustObj = ins.objections.find((o) => /trust|fee|catch|hidden|approv|too good/i.test(o)) || ins.objections[0] || 'Skepticism that the terms are as good as they sound'
+  const topObj = ins.objections[0] || 'Worried about fees after the intro'
+  const gapTerm = ins.gaps[0]?.term || 'APR after any intro period'
+  return [
+    { id: 'q-appeal', type: 'likert', text: 'Overall, how appealing is this offer to you?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'], source: { kind: 'theme', label: topTheme } },
+    { id: 'q-trust', type: 'likert', text: 'How much do you trust that the terms are as good as they sound?', scale: ['Not at all', 'A little', 'Somewhat', 'Mostly', 'Completely'], source: { kind: 'objection', label: trustObj } },
+    { id: 'q-comp-apr', type: 'comprehension', text: 'After any intro period, the APR on this card is…', options: ['0% forever', 'A variable go-to APR based on creditworthiness', 'Always 9.99%', 'There is no APR'], correctIndex: 1, source: { kind: 'comprehensionGap', label: 'Material-term check — APR', term: gapTerm } },
+    { id: 'q-comp-fee', type: 'comprehension', text: 'The annual fee on this card is…', options: ['Stated clearly up front', 'Not stated anywhere', 'Charged only after year one', 'Refundable'], correctIndex: 0, source: { kind: 'comprehensionGap', label: 'Material-term check — fee', term: 'Annual fee disclosure' } },
+    { id: 'q-maxdiff', type: 'maxdiff', text: 'Which of these matters MOST to you?', options: variants.map((v) => v.valueProp || v.name), source: { kind: 'theme', label: 'Value-prop trade-off raised in the discussion' } },
+    { id: 'q-intent', type: 'intent', text: 'How likely are you to apply for this card?', scale: ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'], source: { kind: 'intent', label: 'Apply-intent go-around in the focus group' } },
+    { id: 'q-open', type: 'open', text: 'What, if anything, gives you pause about applying?', source: { kind: 'objection', label: topObj } },
+  ]
+}
+
+// Build a survey instrument whose every item is anchored to a focus-group insight.
+export async function buildSurvey({ settings, focusGroup, variants, campaign }) {
+  const ins = focusInsights(focusGroup)
   if (hasKey(settings)) {
     try {
-      const themes = focusGroup?.perVariant?.flatMap((v) => v.themes) || []
       const data = await callLLMJson({
         settings,
         temperature: 0.5,
-        system: 'You design quantitative survey instruments for credit-card creative testing. Build items grounded in the focus-group themes.',
-        prompt: `Focus-group themes: ${JSON.stringify(themes.slice(0, 12))}.
-Variants: ${JSON.stringify(variants.map((v) => ({ id: v.id, name: v.name })))}
-Return a JSON array of survey items. Types: "likert" (appeal, 5-pt), "comprehension" (with options + correctIndex), "maxdiff" (value-prop forced choice), "intent" (apply intent 5-pt), "open". Each item: {id,type,text,options?,correctIndex?}. Include 1-2 comprehension checks on material terms (APR/fees).`,
+        system: 'You design quantitative survey instruments for credit-card creative testing at a regulated issuer. EVERY item must be grounded in a specific focus-group insight (a theme, an objection, or a material-term comprehension gap) and must name that insight in a "source" field. Always include 1-2 comprehension checks on material terms (APR / fees). Keep wording plain and unbiased.',
+        prompt: `Campaign: ${PRODUCTS_BY_ID[campaign?.product]?.name || 'credit card'}.
+Focus-group themes: ${JSON.stringify(ins.themes.slice(0, 10))}
+Focus-group objections: ${JSON.stringify(ins.objections.slice(0, 8))}
+Comprehension gaps (material terms personas misread): ${JSON.stringify(ins.gaps.slice(0, 5))}
+Variants (for the value-prop forced choice): ${JSON.stringify(variants.map((v) => ({ id: v.id, valueProp: v.valueProp || v.name })))}
+Return a JSON array of 6-9 survey items. Types: "likert" (appeal/trust, 5-pt scale), "comprehension" (options + correctIndex), "maxdiff" (value-prop forced choice; options = the variant value props), "intent" (apply-intent 5-pt), "open". Each item: {id,type,text,scale?,options?,correctIndex?,source:{kind:"theme"|"objection"|"comprehensionGap"|"intent"|"baseline",label:<the exact focus-group insight this question tests>,term?}}.`,
       })
-      return (Array.isArray(data) ? data : data.items || []).map((q, i) => ({ id: q.id || `q${i + 1}`, ...q }))
+      const items = (Array.isArray(data) ? data : data.items || [])
+      if (items.length) return items.map((q, i) => normalizeQuestion(q, i))
     } catch (e) { /* fall back */ }
   }
-  return defaultSurvey(variants)
+  return surveyFromFocus(ins, variants)
+}
+
+// Topic-targeted questions the deterministic regenerate path can add from a comment.
+const REGEN_TOPICS = [
+  { test: /fee|annual|cost|charge/i, make: () => ({ type: 'likert', text: 'How clear is the annual fee on this card?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Completely'], source: { kind: 'comment', label: 'Reviewer asked to probe the annual fee' } }) },
+  { test: /apr|interest|\brate\b/i, make: () => ({ type: 'comprehension', text: 'The go-to APR after any intro period is…', options: ['Fixed forever', 'A variable rate based on creditworthiness', 'Zero', 'Not shown'], correctIndex: 1, source: { kind: 'comment', label: 'Reviewer asked to probe the APR' } }) },
+  { test: /reward|cash ?back|point|mile|earn/i, make: () => ({ type: 'likert', text: 'How valuable are the rewards on this card to you?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'], source: { kind: 'comment', label: 'Reviewer asked to probe rewards' } }) },
+  { test: /trust|honest|catch|hidden|scam|believe/i, make: () => ({ type: 'likert', text: 'How much do you trust this offer is what it claims?', scale: ['Not at all', 'A little', 'Somewhat', 'Mostly', 'Completely'], source: { kind: 'comment', label: 'Reviewer asked to probe trust' } }) },
+  { test: /credit|score|build|limit|approv/i, make: () => ({ type: 'likert', text: 'How confident are you this card will help your credit?', scale: ['Not at all', 'Slightly', 'Somewhat', 'Very', 'Extremely'], source: { kind: 'comment', label: 'Reviewer asked to probe credit-building' } }) },
+  { test: /digital|app|mobile|online/i, make: () => ({ type: 'likert', text: 'How appealing is the digital / app experience implied here?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'], source: { kind: 'comment', label: 'Reviewer asked to probe the digital experience' } }) },
+]
+
+function regenFallback(instrument, comments, ins, variants) {
+  let out = (instrument || []).map((q) => ({ ...q }))
+  const c = comments || ''
+  let matched = false
+  REGEN_TOPICS.forEach((t, i) => {
+    if (t.test.test(c)) {
+      matched = true
+      const q = t.make()
+      if (!out.some((x) => x.text === q.text)) out.push({ id: `q-rg-${i}-${hash(c + i) % 9999}`, ...q })
+    }
+  })
+  // "add a question about X" with no recognized topic → an open-end echoing the comment.
+  if (!matched && /\badd\b/i.test(c)) {
+    const stripped = c.replace(/^.*?\badd\b\s*(a|an|another)?\s*(question|item)?\s*(about|on|for|covering)?\s*/i, '').trim()
+    const text = stripped ? `${stripped.charAt(0).toUpperCase()}${stripped.slice(1)}`.replace(/[.?!]*$/, '') + '?' : 'What else matters most to you about this offer?'
+    out.push({ id: `q-rg-open-${hash(c) % 9999}`, type: 'open', text: trunc(text, 160), source: { kind: 'comment', label: 'Added from reviewer comment' } })
+  }
+  // "fewer / shorter / trim" → collapse to a single open-end.
+  if (/\b(shorter|fewer|trim|too many|too long|remove an open)\b/i.test(c)) {
+    const opens = out.filter((q) => q.type === 'open')
+    if (opens.length > 1) out = out.filter((q) => q.type !== 'open' || q === opens[0])
+  }
+  return out.map((q, i) => normalizeQuestion(q, i))
+}
+
+// Refine the instrument using reviewer comments, keeping focus-group grounding.
+export async function regenerateSurvey({ settings, instrument, comments, focusGroup, variants }) {
+  const ins = focusInsights(focusGroup)
+  if (hasKey(settings)) {
+    try {
+      const data = await callLLMJson({
+        settings,
+        temperature: 0.5,
+        system: 'You refine quantitative survey instruments for credit-card creative testing. Apply the reviewer comments faithfully, but keep every item grounded in the focus-group insights and keep at least one material-term comprehension check. Each item must keep a "source" naming the insight it traces to.',
+        prompt: `Current instrument: ${JSON.stringify((instrument || []).map((q) => ({ id: q.id, type: q.type, text: q.text, scale: q.scale, options: q.options, correctIndex: q.correctIndex, source: q.source })))}
+Reviewer comments to apply: "${comments}"
+Focus-group themes: ${JSON.stringify(ins.themes.slice(0, 10))}
+Focus-group objections: ${JSON.stringify(ins.objections.slice(0, 8))}
+Comprehension gaps: ${JSON.stringify(ins.gaps.slice(0, 5))}
+Variants (for maxdiff options): ${JSON.stringify(variants.map((v) => ({ id: v.id, valueProp: v.valueProp || v.name })))}
+Return the FULL revised JSON array of items: {id,type,text,scale?,options?,correctIndex?,source:{kind,label,term?}}. Preserve unchanged items' ids.`,
+      })
+      const items = (Array.isArray(data) ? data : data.items || [])
+      if (items.length) return items.map((q, i) => normalizeQuestion(q, i))
+    } catch (e) { /* fall back */ }
+  }
+  return regenFallback(instrument, comments, ins, variants)
+}
+
+// ---- per-question outcome math (everyone answers; distributions, not random insight) ----
+// Build a 5-point distribution (pcts summing to 100) with an exact top-2-box share.
+function likertDist(top2, posLean, r) {
+  top2 = clampInt(top2, 2, 96)
+  const p5 = clampInt(top2 * (0.42 + posLean * 0.16) + (r() * 4 - 2), 1, top2 - 1)
+  const p4 = top2 - p5
+  const rest = 100 - top2
+  const p3 = clampInt(rest * 0.5 + (r() * 4 - 2), 0, rest)
+  const p2 = clampInt((rest - p3) * 0.62, 0, rest - p3)
+  const p1 = Math.max(0, rest - p3 - p2)
+  return [p1, p2, p3, p4, p5]
+}
+function distCounts(pcts, n) {
+  const c = pcts.map((p) => Math.round((p / 100) * n))
+  const diff = n - c.reduce((a, b) => a + b, 0)
+  if (c.length) { const idx = c.indexOf(Math.max(...c)); c[idx] = Math.max(0, c[idx] + diff) }
+  return c
+}
+function meanOf(pcts) { return Math.round((pcts.reduce((a, p, i) => a + p * (i + 1), 0) / 100) * 10) / 10 }
+
+function openVerbatims(objs) {
+  const tmpl = [
+    (o) => `“Honestly, ${o.toLowerCase()} — that's the thing I'd want cleared up before I'd apply.”`,
+    (o) => `“${o.replace(/^./, (m) => m.toUpperCase())}. Show me that's handled and I'm probably in.”`,
+    (o) => `“My only real pause is ${o.toLowerCase()}, if I'm being honest.”`,
+    (o) => `“I'd want ${o.toLowerCase()} spelled out plainly first — then we can talk.”`,
+  ]
+  return (objs.length ? objs : ['worried about fees after the intro', 'not sure it really helps my credit', 'the rewards feel generic']).slice(0, 3).map((o, i) => tmpl[i % tmpl.length](o))
+}
+
+// Turn already-computed per-variant signal into per-question response distributions
+// plus a deterministic key-takeaways summary. Shared by fieldSurvey and the seed demos.
+export function deriveSurveyOutcomes({ instrument, n, variants, segs = [], perVariant, focusGroup }) {
+  const ins = focusInsights(focusGroup)
+  const pvOf = (id) => perVariant.find((v) => v.variantId === id) || {}
+  const fgOf = (id) => focusGroup?.perVariant?.find((v) => v.variantId === id) || {}
+  const vName = (id) => variants.find((v) => v.id === id)?.name || id
+
+  const questions = (instrument || []).map((q) => {
+    const r = rng(hash('out' + q.id))
+    const base = { id: q.id, type: q.type, text: q.text, source: q.source || null }
+
+    if (q.type === 'likert' || q.type === 'intent' || q.type === 'rating') {
+      const scale = q.scale || ['1', '2', '3', '4', '5']
+      const byVariant = variants.map((v) => {
+        const pv = pvOf(v.id)
+        const top2 = q.type === 'intent'
+          ? clampInt((pv.applyIntent ?? 40) + 10, 4, 92)
+          : /trust/i.test(q.id + ' ' + q.text)
+            ? clampInt(fgOf(v.id).trust ?? 55, 4, 94)
+            : clampInt(pv.top2box ?? 60, 4, 94)
+        const dist = likertDist(top2, (pv.top2box ?? 60) / 100, r)
+        return { variantId: v.id, name: vName(v.id), distribution: dist, counts: distCounts(dist, n), top2box: dist[3] + dist[4], mean: meanOf(dist) }
+      })
+      const overall = scale.map((_, i) => Math.round(byVariant.reduce((a, bv) => a + bv.distribution[i], 0) / byVariant.length))
+      // re-normalize overall to 100 after rounding
+      const fix = 100 - overall.reduce((a, b) => a + b, 0); overall[overall.indexOf(Math.max(...overall))] += fix
+      return { ...base, scale, distribution: overall, counts: distCounts(overall, n), top2box: overall[3] + overall[4], mean: meanOf(overall), byVariant }
+    }
+
+    if (q.type === 'comprehension') {
+      const options = q.options || []
+      const correctIndex = q.correctIndex ?? 0
+      const byVariant = variants.map((v) => ({ variantId: v.id, name: vName(v.id), correctPct: clampInt(pvOf(v.id).comprehensionRate ?? 70, 5, 99) }))
+      const correctPct = Math.round(byVariant.reduce((a, bv) => a + bv.correctPct, 0) / byVariant.length)
+      const wrong = 100 - correctPct
+      const wrongIdxs = options.map((_, i) => i).filter((i) => i !== correctIndex)
+      const misreadIdx = wrongIdxs[0] ?? 0
+      const byOption = options.map((opt, i) => {
+        let pct
+        if (i === correctIndex) pct = correctPct
+        else if (i === misreadIdx) pct = Math.round(wrong * 0.62)
+        else pct = Math.round((wrong * 0.38) / Math.max(1, wrongIdxs.length - 1))
+        return { label: opt, pct, correct: i === correctIndex, misread: i === misreadIdx && wrong > 0 }
+      })
+      if (byOption[correctIndex]) { const s = byOption.reduce((a, o) => a + o.pct, 0); byOption[correctIndex].pct += (100 - s) }
+      const worstVariant = [...byVariant].sort((a, b) => a.correctPct - b.correctPct)[0]
+      // Flag if EITHER the overall rate OR any single variant falls below the 70% comprehension bar,
+      // so a weak variant's material-term misread is never masked by a strong one's average.
+      const flagged = correctPct < 70 || (worstVariant && worstVariant.correctPct < 70)
+      return { ...base, options, correctIndex, correctPct, byOption, counts: distCounts(byOption.map((o) => o.pct), n), byVariant, worstVariant, flagged, term: q.source?.term || ins.gaps[0]?.term || 'a material term' }
+    }
+
+    if (q.type === 'maxdiff') {
+      const opts = (q.options && q.options.length) ? q.options : variants.map((v) => v.valueProp || v.name)
+      const shares = variants.map((v, i) => ({ label: opts[i] ?? (v.valueProp || v.name), variantId: v.id, name: vName(v.id), pct: pvOf(v.id).prefShare ?? Math.round(100 / variants.length) }))
+      const s = shares.reduce((a, o) => a + o.pct, 0); if (shares[0]) shares[0].pct += (100 - s)
+      return { ...base, shares, counts: distCounts(shares.map((o) => o.pct), n) }
+    }
+
+    // open-end → mined themes + representative verbatims
+    const objs = ins.objections.length ? ins.objections : ['Worried about fees after the intro', 'Wants proof it helps their credit', 'Not sure the rewards are worth it']
+    const themes = objs.slice(0, 4).map((o, i) => ({ label: o, pct: clampInt(42 - i * 9 + (r() * 10 - 5), 6, 52) }))
+    return { ...base, themes, verbatims: openVerbatims(objs) }
+  })
+
+  const takeaways = surveyTakeaways({ questions, perVariant, variants, segs, ins, n, vName })
+  return { questions, takeaways }
+}
+
+function surveyTakeaways({ questions, perVariant, variants, segs, ins, n, vName }) {
+  const out = []
+  const ranked = [...perVariant].sort((a, b) => b.prefShare - a.prefShare)
+  const w = ranked[0], runner = ranked[1]
+  if (w) {
+    const margin = w.prefShare - (runner?.prefShare ?? 0)
+    out.push(`${vName(w.variantId)} leads on preference share at ${w.prefShare}%${runner ? ` vs ${runner.prefShare}% for ${vName(runner.variantId)} — a ${margin}-pt ${margin >= 18 ? 'clear' : margin >= 8 ? 'moderate' : 'narrow'} lead` : ''}, across ${n} synthetic respondents.`)
+  }
+  const appeal = questions.find((q) => q.id === 'q-appeal') || questions.find((q) => q.type === 'likert')
+  if (appeal) out.push(`${appeal.top2box}% rate the offer Very or Extremely appealing — appeal is ${appeal.top2box >= 60 ? 'strong' : appeal.top2box >= 45 ? 'solid but not decisive' : 'soft'}.`)
+  const comps = questions.filter((q) => q.type === 'comprehension')
+  const flagged = comps.find((q) => q.flagged)
+  if (flagged) {
+    const worst = (flagged.byVariant || []).slice().sort((a, b) => a.correctPct - b.correctPct)[0]
+    out.push(`⚠ Comprehension risk — only ${flagged.correctPct}% read the ${flagged.term} correctly${worst ? `, worst on ${worst.name} (${worst.correctPct}%)` : ''}. That misread is both a conversion risk and a compliance signal: fix the disclosure before fielding for real.`)
+  } else if (comps.length) {
+    out.push(`Material-term comprehension is healthy (${comps[0].correctPct}% correct on the APR / fee check) — the required disclosures are landing.`)
+  }
+  const intent = questions.find((q) => q.type === 'intent')
+  const intentLeader = [...perVariant].sort((a, b) => b.applyIntent - a.applyIntent)[0]
+  if (intent) out.push(`${intent.top2box}% say they would Probably or Definitely apply${intentLeader ? `; apply-intent peaks on ${vName(intentLeader.variantId)}` : ''}.`)
+  if (ins.objections[0]) out.push(`The most common hesitation mirrors the focus group: “${ins.objections[0]}.” Address it head-on in the next creative round.`)
+  if (segs.length > 1 && w) {
+    const flip = segs.find((s) => {
+      const best = perVariant.map((v) => ({ id: v.variantId, sh: v.bySegment?.find((b) => b.segment === s.name)?.prefShare ?? 0 })).sort((a, b) => b.sh - a.sh)[0]
+      return best && best.id !== w.variantId
+    })
+    if (flip) out.push(`Segment split: ${flip.name} actually leans the other way — worth a tailored treatment rather than one message for all.`)
+  }
+  return out
 }
 
 export async function fieldSurvey({ settings, instrument, panelSize, variants, target, focusGroup }) {
@@ -355,7 +597,26 @@ export async function fieldSurvey({ settings, instrument, panelSize, variants, t
     })
   })
   const ranking = [...perVariant].sort((a, b) => b.prefShare - a.prefShare).map((v) => v.variantId)
-  return { n, perVariant: perVariant.map(({ _score, ...rest }) => rest), ranking }
+  const cleanPV = perVariant.map(({ _score, ...rest }) => rest)
+  const { questions, takeaways } = deriveSurveyOutcomes({ instrument, n, variants, segs, perVariant: cleanPV, focusGroup })
+
+  // With a key, let the LLM polish the plain-English takeaways (numbers stay anchored).
+  let finalTakeaways = takeaways
+  if (hasKey(settings)) {
+    try {
+      const data = await callLLMJson({
+        settings,
+        temperature: 0.4,
+        system: 'You are a marketing-science lead writing the key takeaways from a synthetic survey. Be crisp and honest. These are directional signal, not validated research. Keep every number exactly as given. Always keep the comprehension/compliance flag if present.',
+        prompt: `Survey n=${n}. Per-variant: ${JSON.stringify(cleanPV.map((v) => ({ variant: variants.find((x) => x.id === v.variantId)?.name, top2box: v.top2box, comprehension: v.comprehensionRate, applyIntent: v.applyIntent, prefShare: v.prefShare })))}
+Draft takeaways: ${JSON.stringify(takeaways)}
+Return JSON: {"takeaways": ["...", "..."]} — 4-6 tight bullets, keeping all figures and any ⚠ comprehension/compliance flag.`,
+      })
+      if (Array.isArray(data?.takeaways) && data.takeaways.length) finalTakeaways = data.takeaways.map(String)
+    } catch (e) { /* keep deterministic */ }
+  }
+
+  return { n, perVariant: cleanPV, ranking, questions, takeaways: finalTakeaways }
 }
 
 // =====================================================================
@@ -711,17 +972,6 @@ export function buildModeratedTranscript({ personas, variants, campaign = {}, pe
   push('moderator', 'Moderator', MOD.close, { phase: 'Closing' })
 
   return transcript
-}
-
-function defaultSurvey(variants) {
-  return [
-    { id: 'q1', type: 'likert', text: 'How appealing is this offer to you?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'] },
-    { id: 'q2', type: 'comprehension', text: 'After the intro period, the APR on this card is…', options: ['0% forever', 'A variable go-to APR based on creditworthiness', 'Always 9.99%', 'There is no APR'], correctIndex: 1 },
-    { id: 'q3', type: 'comprehension', text: 'The annual fee for this card is…', options: ['$0', '$95', 'Not stated', 'Refundable'], correctIndex: 0 },
-    { id: 'q4', type: 'maxdiff', text: 'Which value prop matters most to you?', options: variants.map((v) => v.valueProp || v.name) },
-    { id: 'q5', type: 'intent', text: 'How likely are you to apply?', scale: ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'] },
-    { id: 'q6', type: 'open', text: 'What, if anything, gives you pause about applying?' },
-  ]
 }
 
 // ---------- tiny utils ----------

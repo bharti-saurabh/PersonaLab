@@ -4,7 +4,7 @@
 
 import { screenAll } from '../services/compliance.js'
 import { powerPlan, simulateOutcome } from '../services/stats.js'
-import { buildModeratedTranscript } from '../services/generators.js'
+import { buildModeratedTranscript, deriveSurveyOutcomes } from '../services/generators.js'
 import { getSegment, describeTarget } from './segments.js'
 import { DEFAULT_RULEPACK } from './complianceRules.js'
 
@@ -49,12 +49,13 @@ function focusFor(variants, perVariantMeta, personas, campaign) {
 }
 
 const SURVEY_INSTRUMENT = [
-  { id: 'q1', type: 'likert', text: 'How appealing is this offer to you?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'] },
-  { id: 'q2', type: 'comprehension', text: 'After any intro period, the APR on this card is…', options: ['0% forever', 'A variable go-to APR based on creditworthiness', 'Always 9.99%', 'There is no APR'], correctIndex: 1 },
-  { id: 'q3', type: 'comprehension', text: 'The annual fee for this card is…', options: ['$0', '$95', 'Not stated', 'Refundable'], correctIndex: 0 },
-  { id: 'q4', type: 'maxdiff', text: 'Which value prop matters most to you?' },
-  { id: 'q5', type: 'intent', text: 'How likely are you to apply?', scale: ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'] },
-  { id: 'q6', type: 'open', text: 'What, if anything, gives you pause about applying?' },
+  { id: 'q-appeal', type: 'likert', text: 'Overall, how appealing is this offer to you?', scale: ['Not at all', 'Slightly', 'Moderately', 'Very', 'Extremely'], source: { kind: 'theme', label: 'Clarity of the value proposition' } },
+  { id: 'q-trust', type: 'likert', text: 'How much do you trust that the terms are as good as they sound?', scale: ['Not at all', 'A little', 'Somewhat', 'Mostly', 'Completely'], source: { kind: 'objection', label: 'Skepticism that the offer is too good to be true' } },
+  { id: 'q-comp-apr', type: 'comprehension', text: 'After any intro period, the APR on this card is…', options: ['0% forever', 'A variable go-to APR based on creditworthiness', 'Always 9.99%', 'There is no APR'], correctIndex: 1, source: { kind: 'comprehensionGap', label: 'Material-term check — APR', term: 'APR after intro period' } },
+  { id: 'q-comp-fee', type: 'comprehension', text: 'The annual fee on this card is…', options: ['Stated clearly up front', 'Not stated anywhere', 'Charged only after year one', 'Refundable'], correctIndex: 0, source: { kind: 'comprehensionGap', label: 'Material-term check — fee', term: 'Annual fee disclosure' } },
+  { id: 'q-maxdiff', type: 'maxdiff', text: 'Which of these matters MOST to you?', source: { kind: 'theme', label: 'Value-prop trade-off raised in the discussion' } },
+  { id: 'q-intent', type: 'intent', text: 'How likely are you to apply for this card?', scale: ['Definitely not', 'Probably not', 'Might', 'Probably', 'Definitely'], source: { kind: 'intent', label: 'Apply-intent go-around in the focus group' } },
+  { id: 'q-open', type: 'open', text: 'What, if anything, gives you pause about applying?', source: { kind: 'objection', label: 'Worried about fees after the intro' } },
 ]
 
 function buildProject1() {
@@ -92,7 +93,7 @@ function buildProject1() {
   const survey = buildSurvey(id, variants, segments, [], {
     [`${id}-vA`]: { top2box: 71, comprehensionRate: 86, applyIntent: 41, prefShare: 56 },
     [`${id}-vB`]: { top2box: 66, comprehensionRate: 58, applyIntent: 38, prefShare: 44 },
-  })
+  }, focusGroup)
 
   const recommendation = {
     winnerId: `${id}-vA`,
@@ -164,7 +165,7 @@ function buildProject2() {
   const survey = buildSurvey(id, variants, segments, [], {
     [`${id}-vA`]: { top2box: 68, comprehensionRate: 83, applyIntent: 44, prefShare: 63 },
     [`${id}-vB`]: { top2box: 51, comprehensionRate: 49, applyIntent: 33, prefShare: 37 },
-  })
+  }, focusGroup)
 
   const recommendation = {
     winnerId: `${id}-vA`,
@@ -201,7 +202,7 @@ function buildProject2() {
   }
 }
 
-function buildSurvey(id, variants, segments, custom, perVariantStats) {
+function buildSurvey(id, variants, segments, custom, perVariantStats, focusGroup) {
   const segs = segments.map((sid) => getSegment(sid, custom)).filter(Boolean)
   const perVariant = variants.map((v) => {
     const stat = perVariantStats[v.id]
@@ -220,7 +221,10 @@ function buildSurvey(id, variants, segments, custom, perVariantStats) {
     perVariant.forEach((v, i) => { v.bySegment.find((b) => b.segment === s.name).prefShare = Math.round((exps[i] / tot) * 100) })
   })
   const ranking = [...perVariant].sort((a, b) => b.prefShare - a.prefShare).map((v) => v.variantId)
-  return { instrument: SURVEY_INSTRUMENT, results: { n: id.includes('student') ? 300 : 250, perVariant, ranking } }
+  const n = id.includes('student') ? 300 : 250
+  const instrument = SURVEY_INSTRUMENT.map((q) => ({ ...q }))
+  const { questions, takeaways } = deriveSurveyOutcomes({ instrument, n, variants, segs, perVariant, focusGroup })
+  return { instrument, results: { n, perVariant, ranking, questions, takeaways } }
 }
 
 function buildAB({ baselineRate, mde, dailyTrafficPerArm, prefShare, primaryMetric }) {
