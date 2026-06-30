@@ -683,51 +683,127 @@ Return JSON: {"takeaways": ["...", "..."]} — 4-6 tight bullets, keeping all fi
 // =====================================================================
 export async function recommend({ settings, focusGroup, survey, variants, target }) {
   const segs = target.segments.map((id) => getSegment(id, target.custom)).filter(Boolean)
-  const ranked = [...survey.perVariant].sort((a, b) => b.prefShare - a.prefShare)
-  const winner = ranked[0]
+  // Accept the full survey slice ({ instrument, results }) or a bare results object.
+  const results = survey?.results || survey || {}
+  const perVariant = results.perVariant || []
+  const questions = results.questions || []
+  const vName = (id) => variants.find((v) => v.id === id)?.name || id
+
+  // ---- Read the winner straight out of the questions respondents actually answered ----
+  // 1) The forced-choice head-to-head preference question IS the preference-share result.
+  const prefQ = questions.find((q) => q.preference) || questions.find((q) => q.type === 'maxdiff')
+  const prefShareOf = (id) =>
+    prefQ?.shares?.find((s) => s.variantId === id)?.pct
+    ?? perVariant.find((v) => v.variantId === id)?.prefShare ?? 0
+  // 2) The comprehension question = the material-term read + the compliance signal.
+  const compQ = questions.find((q) => q.type === 'comprehension')
+  const compOf = (id) =>
+    compQ?.byVariant?.find((b) => b.variantId === id)?.correctPct
+    ?? perVariant.find((v) => v.variantId === id)?.comprehensionRate ?? null
+  // 3) Appeal (top-2 box) + apply-intent likert questions = within-cell diagnostics.
+  const appealQ = questions.find((q) => q.id === 'q-appeal')
+    || questions.find((q) => q.type === 'likert' && /appeal/i.test(q.id + ' ' + q.text))
+    || questions.find((q) => q.type === 'likert')
+  const intentQ = questions.find((q) => q.type === 'intent')
+  const top2Of = (q, id) => q?.byVariant?.find((b) => b.variantId === id)?.top2box ?? null
+
+  const scored = variants.map((v) => ({
+    variantId: v.id,
+    prefShare: prefShareOf(v.id),
+    appeal: top2Of(appealQ, v.id),
+    intent: top2Of(intentQ, v.id),
+    comprehension: compOf(v.id),
+  }))
+  const ranked = [...scored].sort((a, b) => b.prefShare - a.prefShare)
+  const winner = ranked[0] || { variantId: variants[0]?.id, prefShare: 0 }
+  const runnerUp = ranked[1]
   const winnerVar = variants.find((v) => v.id === winner.variantId)
-  const margin = winner.prefShare - (ranked[1]?.prefShare ?? 0)
+  const margin = (winner.prefShare ?? 0) - (runnerUp?.prefShare ?? 0)
   const confidence = margin >= 18 ? 'high' : margin >= 8 ? 'moderate' : 'low'
 
+  // Segment-level winner from the per-segment preference share in the survey results.
   const segmentBreakdown = segs.map((s) => {
     let best = null, bestShare = -1
-    survey.perVariant.forEach((v) => {
-      const seg = v.bySegment.find((b) => b.segment === s.name)
+    perVariant.forEach((v) => {
+      const seg = v.bySegment?.find((b) => b.segment === s.name)
       if (seg && seg.prefShare > bestShare) { bestShare = seg.prefShare; best = v.variantId }
     })
     const bv = variants.find((v) => v.id === best)
-    return { segment: s.name, preferredVariantId: best, preferredVariant: bv?.name, prefShare: bestShare, why: `${s.name} responds to ${bv?.valueProp || bv?.name} — aligned to their motivation (${s.motivation}).` }
+    return { segment: s.name, preferredVariantId: best, preferredVariant: bv?.name, prefShare: bestShare < 0 ? null : bestShare, why: `${s.name} responds to ${bv?.valueProp || bv?.name} — aligned to their motivation (${s.motivation}).` }
   })
+
+  // Comprehension / compliance read on the winner, taken from the comprehension question.
+  const winnerComp = compOf(winner.variantId)
+  const winnerWeakComp = winnerComp != null && winnerComp < 70   // the winner itself misreads the term
+  const compFlagged = !!compQ?.flagged || winnerWeakComp          // the question is flagged (any variant below the bar)
+  const compTerm = compQ?.term || 'a material term'
+  const compWorst = compQ?.worstVariant || (compQ?.byVariant ? [...compQ.byVariant].sort((a, b) => a.correctPct - b.correctPct)[0] : null)
+
+  // A compact, question-anchored evidence object so the recommendation is traceable
+  // back to exactly what was asked and answered (surfaced in Step 7).
+  const evidence = {
+    preferenceQuestion: prefQ?.text || null,
+    preferenceShares: scored.map((s) => ({ variant: vName(s.variantId), prefSharePct: s.prefShare, isWinner: s.variantId === winner.variantId })),
+    appealQuestion: appealQ?.text || null,
+    winnerAppealTop2Box: top2Of(appealQ, winner.variantId),
+    intentQuestion: intentQ?.text || null,
+    winnerIntentTop2Box: top2Of(intentQ, winner.variantId),
+    comprehensionQuestion: compQ?.text || null,
+    comprehensionTerm: compTerm,
+    comprehensionByVariant: compQ?.byVariant?.map((b) => ({ variant: b.name, correctPct: b.correctPct })) || null,
+    comprehensionFlagged: compFlagged,
+  }
 
   if (hasKey(settings)) {
     try {
       const data = await callLLMJson({
         settings,
         temperature: 0.4,
-        system: 'You are a marketing-science lead. Give a crisp, honest recommendation. Synthetic results are directional, not definitive — say so.',
-        prompt: `Winner by preference share: ${winnerVar?.name} (${winner.prefShare}% vs runner-up ${ranked[1]?.prefShare ?? 0}%).
-Target: ${briefOf(target)}
-Focus-group per-variant: ${JSON.stringify(focusGroup?.perVariant || [])}
-Survey per-variant: ${JSON.stringify(survey.perVariant)}
-Return JSON: {"rationale": "...", "intersectionalFit": "how well the winner serves the combined target vs each component segment", "improvements": ["..."], "predictedPrefShare": ${winner.prefShare}, "confidence": "${confidence}"}`,
+        system: 'You are a marketing-science lead. Recommend the winning variant grounded ONLY in the survey questions that were actually asked and answered. Cite the specific questions (the forced-choice preference question, appeal, apply-intent, comprehension) and their numbers. Never override a clear preference-share winner, but always flag any comprehension/compliance risk. Synthetic results are directional, not definitive — say so.',
+        prompt: `Target: ${briefOf(target)}
+Winner by the forced-choice preference question: ${winnerVar?.name} (${winner.prefShare}% of choices vs runner-up ${runnerUp?.prefShare ?? 0}%).
+Answered-question evidence: ${JSON.stringify(evidence)}
+Focus-group per-variant (qualitative context only): ${JSON.stringify(focusGroup?.perVariant || [])}
+Return JSON: {"rationale": "2-3 sentences citing the specific survey questions and their numbers", "intersectionalFit": "how well the winner serves the combined target vs each component segment", "improvements": ["..."], "predictedPrefShare": ${winner.prefShare}, "confidence": "${confidence}"}`,
       })
-      return { winnerId: winner.variantId, predictedPrefShare: winner.prefShare, confidence: data.confidence || confidence, rationale: data.rationale, intersectionalFit: data.intersectionalFit, improvements: data.improvements || [], segmentBreakdown }
+      return { winnerId: winner.variantId, predictedPrefShare: winner.prefShare, confidence: data.confidence || confidence, rationale: data.rationale, intersectionalFit: data.intersectionalFit, improvements: data.improvements || [], segmentBreakdown, evidence }
     } catch (e) { /* fall back */ }
   }
 
+  // ---- Deterministic rationale, written straight from the answered questions ----
   const gaps = focusGroup?.perVariant?.find((v) => v.variantId === winner.variantId)?.comprehensionGaps || []
+  const appealTop2 = top2Of(appealQ, winner.variantId)
+  const intentTop2 = top2Of(intentQ, winner.variantId)
+  const bits = []
+  bits.push(`${winnerVar?.name} wins the head-to-head: asked to pick just one card, ${winner.prefShare}% of respondents chose it${runnerUp ? ` — a ${margin}-pt ${margin >= 18 ? 'clear' : margin >= 8 ? 'moderate' : 'narrow'} lead over ${vName(runnerUp.variantId)} (${runnerUp.prefShare}%)` : ''}.`)
+  if (appealTop2 != null || intentTop2 != null) {
+    bits.push(`Within its own cell it reads well too${appealTop2 != null ? ` — ${appealTop2}% rate it appealing (top-2 box)` : ''}${intentTop2 != null ? `${appealTop2 != null ? ' and ' : ' — '}${intentTop2}% say they'd probably or definitely apply` : ''}.`)
+  }
+  if (winnerComp != null) {
+    if (winnerWeakComp) {
+      bits.push(`But comprehension is the watch-out: only ${winnerComp}% read ${compTerm} correctly on the winner — that misread is both a conversion risk and a compliance signal, so fix the disclosure before fielding for real.`)
+    } else if (compFlagged && compWorst) {
+      bits.push(`The winner's own comprehension holds up (${winnerComp}% read ${compTerm} correctly), but ${compWorst.name} falls below the 70% bar (${compWorst.correctPct}%) — keep the disclosure unmistakable across every variant.`)
+    } else {
+      bits.push(`Material-term comprehension holds up: ${winnerComp}% read ${compTerm} correctly, so the required disclosure is landing.`)
+    }
+  }
+
   return {
     winnerId: winner.variantId,
     predictedPrefShare: winner.prefShare,
     confidence,
-    rationale: `${winnerVar?.name} leads on predicted preference share (${winner.prefShare}%, a ${margin}-pt margin over the runner-up) and scores highest on combined sentiment, trust, and apply-intent. It speaks to the target's core motivation while keeping required terms clear.`,
-    intersectionalFit: `The winner serves the combined target ${briefOf(target).split('.')[0]}. It is strongest with ${segmentBreakdown[0]?.segment}; watch ${segmentBreakdown[segmentBreakdown.length - 1]?.segment}, where the margin is thinner.`,
+    rationale: bits.join(' '),
+    intersectionalFit: `The winner serves the combined target ${briefOf(target).split('.')[0]}. It is strongest with ${segmentBreakdown[0]?.segment || 'the core segment'}${segmentBreakdown.length > 1 ? `; watch ${segmentBreakdown[segmentBreakdown.length - 1].segment}, where the margin is thinner` : ''}.`,
     improvements: [
-      gaps.length ? `Close the comprehension gap on ${gaps[0].term}: ${gaps[0].issue}` : 'Tighten the value prop in the first line for paid-social truncation.',
-      'Make the APR/fee disclosure even more prominent to lift trust among skeptical members.',
+      winnerWeakComp ? `Make ${compTerm} unmistakable — only ${winnerComp}% read it correctly on the winner.`
+        : compFlagged && compWorst ? `Tighten ${compTerm} on ${compWorst.name} — only ${compWorst.correctPct}% read it correctly there.`
+        : (gaps.length ? `Close the comprehension gap on ${gaps[0].term}: ${gaps[0].issue}` : 'Tighten the value prop in the first line for paid-social truncation.'),
+      runnerUp && margin < 8 ? `The lead over ${vName(runnerUp.variantId)} is thin (${margin} pts) — treat the winner as provisional until the live test confirms it.` : 'Make the APR/fee disclosure even more prominent to lift trust among skeptical members.',
       'Test a benefit-led headline variant against the current angle in the real A/B test.',
     ],
     segmentBreakdown,
+    evidence,
   }
 }
 

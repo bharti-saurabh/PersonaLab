@@ -26,6 +26,11 @@ export default function Step7Recommendation() {
   const focusFor = (id) => project.focusGroup?.perVariant?.find((p) => p.variantId === id)
   const riskFor = (id) => (project.creative.screenResults || []).find((r) => r.variantId === id)?.risk
 
+  // The specific survey questions the recommendation is read from (see services/recommend()).
+  const surveyQuestions = results?.questions || []
+  const prefQ = surveyQuestions.find((q) => q.preference) || surveyQuestions.find((q) => q.type === 'maxdiff')
+  const compQ = surveyQuestions.find((q) => q.type === 'comprehension')
+
   // ---- no survey yet ----
   if (!results) {
     return (
@@ -175,6 +180,59 @@ export default function Step7Recommendation() {
             </div>
             {reco.rationale && <p className="text-sm text-ink-700 mt-4 leading-relaxed border-t border-ink-100 pt-3.5">{reco.rationale}</p>}
           </Stagger>
+
+          {/* ---- Evidence: read straight from the survey answers ---- */}
+          {(prefQ || compQ) && (
+            <Stagger i={1} className="card p-5">
+              <h3 className="font-bold text-ink-900 flex items-center gap-2"><ClipboardList size={17} className="text-brand-600" /> How the survey answers chose this winner</h3>
+              <p className="text-xs text-ink-500 mt-0.5">The recommendation is derived directly from the questions respondents answered — not a separate score. Winner highlighted.</p>
+              <div className="mt-4 grid md:grid-cols-2 gap-4">
+                {prefQ && (
+                  <div className="rounded-lg border border-ink-100 p-4">
+                    <Badge color="violet">Forced-choice preference</Badge>
+                    <p className="text-xs text-ink-600 mt-2">{prefQ.text}</p>
+                    <div className="mt-3 space-y-2.5">
+                      {(prefQ.shares || []).map((s) => {
+                        const isWin = s.variantId === reco.winnerId
+                        return (
+                          <div key={s.variantId}>
+                            <div className="flex justify-between text-xs mb-1">
+                              <span className={isWin ? 'font-semibold text-brand-700' : 'text-ink-700'}>{s.name}{isWin && ' ✓'}</span>
+                              <span className="font-mono tabular-nums">{s.pct}%</span>
+                            </div>
+                            <div className="h-2 rounded bg-ink-100 overflow-hidden"><div className={`h-full rounded ${isWin ? 'bg-brand-500' : 'bg-ink-300'}`} style={{ width: `${s.pct}%` }} /></div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <p className="text-[11px] text-ink-400 mt-3">This share of forced choices is the predicted preference share above.</p>
+                  </div>
+                )}
+                {compQ && (
+                  <div className="rounded-lg border border-ink-100 p-4">
+                    <Badge color={compQ.flagged ? 'rose' : 'emerald'}>{compQ.flagged ? 'Comprehension — flagged' : 'Comprehension check'}</Badge>
+                    <p className="text-xs text-ink-600 mt-2">{compQ.text}</p>
+                    <div className="mt-3 space-y-2.5">
+                      {(compQ.byVariant || []).map((b) => {
+                        const isWin = b.variantId === reco.winnerId
+                        const weak = b.correctPct < 70
+                        return (
+                          <div key={b.variantId}>
+                            <div className="flex justify-between text-xs mb-1">
+                              <span className={isWin ? 'font-semibold text-brand-700' : 'text-ink-700'}>{b.name}{isWin && ' ✓'}</span>
+                              <span className={`font-mono tabular-nums ${weak ? 'text-accent-600 font-semibold' : ''}`}>{b.correctPct}% correct</span>
+                            </div>
+                            <div className="h-2 rounded bg-ink-100 overflow-hidden"><div className={`h-full rounded ${weak ? 'bg-accent-500' : 'bg-emerald-500'}`} style={{ width: `${b.correctPct}%` }} /></div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <p className="text-[11px] text-ink-400 mt-3">Below 70% reading {compQ.term || 'a material term'} correctly is both a conversion risk and a compliance signal.</p>
+                  </div>
+                )}
+              </div>
+            </Stagger>
+          )}
 
           {/* ---- Scorecards ---- */}
           <Stagger i={1} className="">
