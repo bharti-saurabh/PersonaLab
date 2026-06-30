@@ -71,6 +71,86 @@ export function simulateOutcome({ baselineRate, prefShare, perArm }) {
   }
 }
 
+// Default real-world baseline priors per primary metric (all editable in the UI).
+const METRIC_BASELINE = {
+  'Click-through rate (CTR)': 0.012,
+  'Application start rate': 0.06,
+  'Apply rate': 0.045,
+  'Approved-and-activated rate': 0.025,
+}
+const OBJECTIVE_METRIC = {
+  'Drive new applications (apply rate)': 'Apply rate',
+  'Improve click-through to landing page': 'Click-through rate (CTR)',
+  'Increase approved-and-activated accounts': 'Approved-and-activated rate',
+  'Grow qualified application starts': 'Application start rate',
+  'Improve cost-per-funded-account': 'Approved-and-activated rate',
+  'Brand consideration / awareness': 'Click-through rate (CTR)',
+}
+
+// Translate the synthetic signal (recommendation + survey answers + focus group)
+// into a PRIOR for the real A/B test: which metric, a baseline, the lift we expect
+// to see, the MDE to power for, and signal-driven guardrails. Everything here is a
+// starting point the user can override — synthetic is directional, not validated.
+export function deriveAbPlan({ objective, survey, focusGroup, recommendation, variants = [] }) {
+  const results = survey?.results || survey || {}
+  const perVariant = results.perVariant || []
+  const questions = results.questions || []
+  const winnerId = recommendation?.winnerId
+  const vName = (id) => variants.find((v) => v.id === id)?.name || id
+
+  const primaryMetric = OBJECTIVE_METRIC[objective] || 'Apply rate'
+  const baselineRate = METRIC_BASELINE[primaryMetric] ?? 0.045
+
+  // Winner preference share (0..1) — the same signal the outcome simulation uses.
+  const prefSharePct = recommendation?.predictedPrefShare
+    ?? perVariant.find((v) => v.variantId === winnerId)?.prefShare
+    ?? 50
+  const prefShare = clamp(prefSharePct / 100, 0.0001, 0.9999)
+  // Expected relative lift, dampened identically to simulateOutcome() so the planner
+  // and the simulation never disagree.
+  const expectedLift = Math.max(0, (prefShare - 0.5) * 2 * 0.45)
+  // Power to detect a conservative fraction of the expected effect, so a weaker-than-
+  // synthetic reality still isn't under-powered. Floor 5%, cap 50%.
+  const mde = clamp(Math.round(expectedLift * 0.6 * 100) / 100, 0.05, 0.5)
+
+  // ---- Signal-driven guardrails + an explanation of what was learned ----
+  const guardrails = ['Approval rate', 'Early-stage delinquency', 'Cost per funded account', 'Customer complaints']
+  const notes = [
+    `Predicted preference share ${Math.round(prefSharePct)}% → expected relative lift ≈ ${(expectedLift * 100).toFixed(0)}%; powering to detect ${(mde * 100).toFixed(0)}% (a conservative fraction so reality isn't under-powered).`,
+  ]
+
+  const intentQ = questions.find((q) => q.type === 'intent')
+  const winnerIntent = intentQ?.byVariant?.find((b) => b.variantId === winnerId)?.top2box
+  if (winnerIntent != null) notes.push(`Survey apply-intent for ${vName(winnerId)} is ${winnerIntent}% (top-2 box) — corroborates the predicted lift.`)
+
+  const fgWinner = focusGroup?.perVariant?.find((v) => v.variantId === winnerId)
+  if (fgWinner) {
+    notes.push(`Focus group on the winner: sentiment ${fgWinner.sentiment}, trust ${fgWinner.trust}, comprehension ${fgWinner.comprehension}.`)
+    if (fgWinner.trust != null && fgWinner.trust < 55) {
+      guardrails.push('Brand trust / sentiment tracking')
+      notes.push(`Trust is soft (${fgWinner.trust}/100) — added a trust guardrail so a conversion lift doesn't quietly erode trust.`)
+    }
+  }
+
+  const compQ = questions.find((q) => q.type === 'comprehension')
+  if (compQ?.flagged) {
+    guardrails.push('Disclosure comprehension & complaint rate')
+    const worst = compQ.worstVariant || (compQ.byVariant ? [...compQ.byVariant].sort((a, b) => a.correctPct - b.correctPct)[0] : null)
+    notes.push(`⚠ Survey flagged a misread of ${compQ.term || 'a material term'}${worst ? ` (worst on ${worst.name}, ${worst.correctPct}%)` : ''} — added a disclosure-comprehension guardrail to the live test.`)
+  }
+
+  return {
+    primaryMetric,
+    baselineRate,
+    mde,
+    expectedLift,
+    prefSharePct: Math.round(prefSharePct),
+    winnerIntent: winnerIntent ?? null,
+    guardrailMetrics: guardrails.filter((x, i) => guardrails.indexOf(x) === i),
+    notes,
+  }
+}
+
 function normCdf(x) {
   // Abramowitz & Stegun 7.1.26
   const t = 1 / (1 + 0.2316419 * Math.abs(x))

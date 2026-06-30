@@ -4,8 +4,8 @@ import { SectionTitle, Card, Badge, StatCard, SyntheticBanner, EmptyState, Toggl
 import { useStagedGenerate, GenConsole, Stagger, ThinkingPill, useCountUp } from '../components/generate.jsx'
 import { BarsCard, PALETTE } from '../components/charts.jsx'
 import { exportCSV, exportJSON, printReport } from '../utils/export.js'
-import { powerPlan, simulateOutcome } from '../services/stats.js'
-import { FlaskConical, Calculator, FileDown, Save, Target, AlertTriangle, CheckCircle2, Beaker } from 'lucide-react'
+import { powerPlan, simulateOutcome, deriveAbPlan } from '../services/stats.js'
+import { FlaskConical, Calculator, FileDown, Save, Target, AlertTriangle, CheckCircle2, Beaker, Sparkles, Wand2 } from 'lucide-react'
 
 const PRIMARY_METRICS = ['Click-through rate (CTR)', 'Application start rate', 'Apply rate', 'Approved-and-activated rate']
 const DEFAULT_GUARDRAILS = 'Approval rate, Early-stage delinquency, Cost per funded account, Customer complaints'
@@ -22,14 +22,22 @@ export default function Step8ABTest() {
   const objective = project.campaign?.objective || ''
 
   const saved = project.abTest || {}
-  const [primaryMetric, setPrimaryMetric] = useState(saved.primaryMetric || PRIMARY_METRICS[0])
-  const [baselineRate, setBaselineRate] = useState(saved.baselineRate ?? 0.045)
-  const [mde, setMde] = useState(saved.mde ?? 0.10)
+
+  // Learn priors for the live test from the synthetic signal upstream: the survey
+  // answers (preference share, apply-intent, comprehension) and the focus group.
+  const priors = useMemo(
+    () => deriveAbPlan({ objective, survey: project.survey, focusGroup: project.focusGroup, recommendation: rec, variants }),
+    [objective, project.survey, project.focusGroup, rec, variants]
+  )
+
+  const [primaryMetric, setPrimaryMetric] = useState(saved.primaryMetric || priors.primaryMetric)
+  const [baselineRate, setBaselineRate] = useState(saved.baselineRate ?? priors.baselineRate)
+  const [mde, setMde] = useState(saved.mde ?? priors.mde)
   const [alpha, setAlpha] = useState(saved.alpha ?? 0.05)
   const [power, setPower] = useState(saved.power ?? 0.80)
   const [dailyTrafficPerArm, setDailyTrafficPerArm] = useState(saved.dailyTrafficPerArm ?? 1200)
   const [guardrailsText, setGuardrailsText] = useState(
-    saved.guardrailMetrics?.length ? saved.guardrailMetrics.join(', ') : DEFAULT_GUARDRAILS
+    saved.guardrailMetrics?.length ? saved.guardrailMetrics.join(', ') : priors.guardrailMetrics.join(', ')
   )
   const [simOn, setSimOn] = useState(!!saved.simulation)
   const [simResult, setSimResult] = useState(saved.simulation || null)
@@ -42,6 +50,15 @@ export default function Step8ABTest() {
     [guardrailsText]
   )
 
+  // Pull the learned priors into the editable inputs (e.g. after generating the
+  // recommendation while this step was already open).
+  const applyPriors = () => {
+    setPrimaryMetric(priors.primaryMetric)
+    setBaselineRate(priors.baselineRate)
+    setMde(priors.mde)
+    setGuardrailsText(priors.guardrailMetrics.join(', '))
+  }
+
   const plan = useMemo(
     () => powerPlan({ baselineRate, mde, alpha, power, dailyTrafficPerArm }),
     [baselineRate, mde, alpha, power, dailyTrafficPerArm]
@@ -50,8 +67,13 @@ export default function Step8ABTest() {
   const autoHypothesis = useMemo(() => {
     const lift = `a relative lift of at least ${(mde * 100).toFixed(0)}%`
     const base = `Showing "${winnerName}" instead of the control will improve ${primaryMetric.toLowerCase()} by ${lift} (from ${fmtPct(plan.baseline)} to ${fmtPct(plan.target)})`
-    return objective ? `${base}, advancing the campaign objective of ${objective.toLowerCase()}.` : `${base}.`
-  }, [winnerName, primaryMetric, mde, plan.baseline, plan.target, objective])
+    const obj = objective ? `${base}, advancing the campaign objective of ${objective.toLowerCase()}.` : `${base}.`
+    // Ground the hypothesis in the synthetic signal it was derived from.
+    const support = rec
+      ? ` Synthetic signal supports it: ${priors.prefSharePct}% predicted preference share${priors.winnerIntent != null ? ` and ${priors.winnerIntent}% top-2-box apply-intent for the winner` : ''}.`
+      : ''
+    return obj + support
+  }, [winnerName, primaryMetric, mde, plan.baseline, plan.target, objective, rec, priors.prefSharePct, priors.winnerIntent])
 
   const effectiveHypothesis = hypothesis.trim() ? hypothesis : autoHypothesis
 
@@ -105,6 +127,7 @@ export default function Step8ABTest() {
     dailyTrafficPerArm,
     plan,
     simulation,
+    derivedFromSignal: { expectedLift: priors.expectedLift, prefSharePct: priors.prefSharePct, winnerIntent: priors.winnerIntent, notes: priors.notes },
   })
 
   const savePlan = () => update({ abTest: buildAbTest() })
@@ -153,6 +176,34 @@ export default function Step8ABTest() {
             You can still plan the experiment below. Running Step 7 produces a predicted winner and preference share, which unlocks the expected-outcome simulation here.
           </EmptyState>
         </Card>
+      )}
+
+      {rec && (
+        <Stagger i={0} className="card p-5 border-brand-200 bg-gradient-to-br from-brand-50/60 via-white to-violet-50/40">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="grid place-items-center h-9 w-9 rounded-lg bg-white text-brand-600 border border-brand-200 shrink-0"><Sparkles size={18} /></div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-ink-900">Primed from your synthetic signal</h3>
+                <p className="text-xs text-ink-500 mt-0.5 max-w-2xl">The survey answers and focus group set the metric, the lift to expect, the MDE to power for, and the guardrails below. All editable — synthetic is directional, not validated.</p>
+              </div>
+            </div>
+            <button className="btn-ghost shrink-0" onClick={applyPriors} title="Reset the inputs to the values learned from the survey & focus group">
+              <Wand2 size={15} /> Apply suggested values
+            </button>
+          </div>
+          <ul className="mt-3.5 space-y-1.5">
+            {priors.notes.map((note, i) => {
+              const warn = note.trim().startsWith('⚠')
+              return (
+                <li key={i} className={`flex items-start gap-2 text-[13px] ${warn ? 'text-accent-700' : 'text-ink-700'}`}>
+                  <span className={`mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 ${warn ? 'bg-accent-500' : 'bg-brand-400'}`} />
+                  <span>{warn ? note.replace(/^⚠\s*/, '') : note}</span>
+                </li>
+              )
+            })}
+          </ul>
+        </Stagger>
       )}
 
       <div className="grid lg:grid-cols-2 gap-5">
