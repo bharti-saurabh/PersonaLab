@@ -103,6 +103,37 @@ export default function Step5FocusGroup() {
 
       {fg && !gen.running && (
         <>
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <Quote size={16} className="text-ink-500" />
+              <h3 className="font-bold text-ink-900">Discussion transcript</h3>
+              <Badge color="brand" className="ml-1">First look</Badge>
+            </div>
+            <p className="text-xs text-ink-400 mb-4">The raw discussion as it unfolded — read the room first, then see the synthesized signal below. Reactions are paraphrased by the moderator agent and are never attributed as real quotes from real people.</p>
+            <div className="space-y-5">
+              {variants.map((v, vi) => {
+                const entries = (fg.transcript || []).filter((t) => t.variantId === v.id)
+                if (!entries.length) return null
+                return (
+                  <div key={v.id}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="grid place-items-center h-6 w-6 rounded text-white text-xs font-bold" style={{ backgroundColor: PALETTE[vi % PALETTE.length] }}>{String.fromCharCode(65 + vi)}</span>
+                      <span className="font-semibold text-ink-800 text-sm">{v.name}</span>
+                    </div>
+                    <div className="space-y-2 border-l-2 border-ink-100 pl-3.5">
+                      {entries.map((t, i) => (
+                        <div key={i} className="flex items-start justify-between gap-3">
+                          <p className="text-sm text-ink-700"><span className="font-medium text-ink-900">{t.personaName}:</span> {t.text}</p>
+                          <Badge color={INTENT_COLOR[t.intentLabel] || 'ink'} className="shrink-0">{t.intentLabel}</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Card>
+
           {sentimentLeader && (
             <div className="rounded-xl border border-brand-200 bg-gradient-to-r from-brand-50 to-white p-4 flex items-center gap-3 animate-scale-in">
               <span className="grid place-items-center h-11 w-11 rounded-xl bg-brand-600 text-white shrink-0"><Trophy size={20} /></span>
@@ -196,36 +227,6 @@ export default function Step5FocusGroup() {
               )
             })}
           </div>
-
-          <Card className="p-5">
-            <div className="flex items-center gap-2 mb-1">
-              <Quote size={16} className="text-ink-500" />
-              <h3 className="font-bold text-ink-900">Discussion transcript</h3>
-            </div>
-            <p className="text-xs text-ink-400 mb-4">Reactions are paraphrased by the moderator agent and are never attributed as real quotes from real people.</p>
-            <div className="space-y-5">
-              {variants.map((v, vi) => {
-                const entries = (fg.transcript || []).filter((t) => t.variantId === v.id)
-                if (!entries.length) return null
-                return (
-                  <div key={v.id}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="grid place-items-center h-6 w-6 rounded text-white text-xs font-bold" style={{ backgroundColor: PALETTE[vi % PALETTE.length] }}>{String.fromCharCode(65 + vi)}</span>
-                      <span className="font-semibold text-ink-800 text-sm">{v.name}</span>
-                    </div>
-                    <div className="space-y-2 border-l-2 border-ink-100 pl-3.5">
-                      {entries.map((t, i) => (
-                        <div key={i} className="flex items-start justify-between gap-3">
-                          <p className="text-sm text-ink-700"><span className="font-medium text-ink-900">{t.personaName}:</span> {t.text}</p>
-                          <Badge color={INTENT_COLOR[t.intentLabel] || 'ink'} className="shrink-0">{t.intentLabel}</Badge>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </Card>
         </>
       )}
 
