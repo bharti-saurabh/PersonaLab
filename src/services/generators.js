@@ -212,6 +212,88 @@ Keep transcript to ~2-3 reactions per variant. comprehensionGaps must list any m
   return syntheticFocus({ personas: sample, variants, campaign })
 }
 
+// Moderator steers the live discussion in a new direction; returns a short round
+// of additional in-character reactions that engage the directive.
+export async function steerFocusGroup({ settings, directive, personas, variants, campaign }) {
+  const sample = personas.slice(0, Math.min(personas.length, 6))
+  if (hasKey(settings)) {
+    try {
+      const data = await callLLMJson({
+        settings,
+        temperature: settings.temperature ?? 0.9,
+        maxTokens: 1600,
+        system: 'You are the moderator of a synthetic focus group for a regulated credit-card issuer. The moderator is steering the discussion in a new direction. Personas respond in character to the moderator prompt. Paraphrase reactions; never fabricate quotes attributed to real people. Flag any misread material term (APR, fees, deposit, intro period).',
+        prompt: `Moderator steer: "${directive}".
+Campaign: ${PRODUCTS_BY_ID[campaign.product]?.name || 'card'}, objective ${campaign.objective}.
+Personas: ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, objection: p.keyObjection })))}
+Variants: ${JSON.stringify(variants.map((v) => ({ id: v.id, name: v.name, headline: v.headline, valueProp: v.valueProp })))}
+Return JSON: {"transcript":[{"variantId","personaName","text","intentLabel":"would apply|might apply|would not apply"}]}
+Give 3-6 reactions that directly engage the moderator's steer. Keep each reaction to 1-2 sentences.`,
+      })
+      return (data.transcript || []).map((t) => ({ ...t, steer: directive }))
+    } catch (e) { /* fall back */ }
+  }
+  return syntheticSteer({ directive, personas: sample, variants, campaign })
+}
+
+const STEER_TOPICS = [
+  { test: /(annual )?fee|cost|charge|catch/i, key: 'fee' },
+  { test: /apr|interest|rate/i, key: 'apr' },
+  { test: /trust|scam|hidden|fine print|honest|transparen/i, key: 'trust' },
+  { test: /reward|cash ?back|point|mile|earn/i, key: 'rewards' },
+  { test: /credit|score|build|approv|reject/i, key: 'credit' },
+  { test: /app|digital|online|mobile/i, key: 'digital' },
+]
+function steerTopic(d) { return (STEER_TOPICS.find((t) => t.test.test(d)) || { key: 'general' }).key }
+
+function steerLine(topic, p, v, positive) {
+  const vp = v.valueProp || v.name
+  const lines = {
+    fee: positive
+      ? `If the annual fee really is what the headline says, that changes things — ${p.name.split(' ')[0]} would weigh "${vp}" against the cost and likely give it a look.`
+      : `Pushes back on the fee — wants the exact dollar amount and any waivers spelled out before believing "${vp}" is worth it.`,
+    apr: positive
+      ? `Says the APR feels acceptable for how they'd use it, as long as the go-to rate after any intro period is stated plainly.`
+      : `Worries the APR after the intro period isn't clear — assumes the low rate is permanent, which is a material-term misread to flag.`,
+    trust: positive
+      ? `Finds the tone honest and is reassured there's no obvious catch behind "${vp}".`
+      : `Stays skeptical — feels there's always a catch and wants the trade-offs of "${vp}" disclosed up front.`,
+    rewards: positive
+      ? `Likes the rewards angle and starts doing the math on everyday spend; "${vp}" lands if the earn rate is real.`
+      : `Thinks the rewards sound good but generic — wants to know the rate and any caps before trusting "${vp}".`,
+    credit: positive
+      ? `Responds to the credit-building promise; would apply if it demonstrably helps their score.`
+      : `Wants proof the card actually helps their credit and is anxious about being rejected before trusting "${vp}".`,
+    digital: positive
+      ? `Loves that it sounds app-first and instant; "${vp}" plus a slick approval flow would win them over.`
+      : `Expects instant approval and a clean app — would abandon if "${vp}" hides a clunky paperwork-heavy flow.`,
+    general: positive
+      ? `Engages with the moderator's prompt and finds "${vp}" relevant to their situation.`
+      : `Engages with the moderator's prompt but stays guarded about "${vp}" until the terms are clear.`,
+  }
+  return lines[topic] || lines.general
+}
+
+function syntheticSteer({ directive, personas, variants, campaign }) {
+  const topic = steerTopic(directive)
+  const out = []
+  variants.forEach((v) => {
+    const r = rng(hash(v.id + directive))
+    const picks = personas.slice(0, 1 + Math.floor(r() * 2) + 1)
+    picks.forEach((p) => {
+      const positive = p.archetype !== 'skeptical' && r() > 0.4
+      out.push({
+        variantId: v.id,
+        personaName: p.name,
+        text: steerLine(topic, p, v, positive),
+        intentLabel: p.archetype === 'skeptical' ? 'might apply' : positive ? 'would apply' : 'might apply',
+        steer: directive,
+      })
+    })
+  })
+  return out
+}
+
 // =====================================================================
 // SURVEY BUILDER + FIELDING (Step 6)
 // =====================================================================
