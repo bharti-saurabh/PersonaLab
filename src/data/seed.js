@@ -4,6 +4,7 @@
 
 import { screenAll } from '../services/compliance.js'
 import { powerPlan, simulateOutcome } from '../services/stats.js'
+import { buildModeratedTranscript } from '../services/generators.js'
 import { getSegment, describeTarget } from './segments.js'
 import { DEFAULT_RULEPACK } from './complianceRules.js'
 
@@ -41,22 +42,10 @@ function makePersonas(projId, segmentIds, custom, dist, n) {
   })
 }
 
-function focusFor(variants, perVariantMeta, personas) {
-  const transcript = []
-  variants.forEach((v) => {
-    const meta = perVariantMeta[v.id]
-    personas.slice(0, 3).forEach((p) => {
-      transcript.push({
-        variantId: v.id,
-        personaName: p.name,
-        text: p.archetype === 'skeptical'
-          ? `Scrutinizes the offer — wants the APR and any fees spelled out before trusting "${v.headline}". ${meta.comprehensionGaps.length ? 'Initially misread the rate as permanent.' : 'Found the terms clear once pointed out.'}`
-          : `Reacts to "${v.valueProp}" — ${meta.sentiment > 60 ? 'finds it clear and relevant to their goals' : 'finds it a little generic'}. Would ${meta.intentScore > 55 ? 'consider applying' : 'want more detail first'}.`,
-        intentLabel: meta.intentScore > 60 ? 'would apply' : meta.intentScore > 40 ? 'might apply' : 'would not apply',
-      })
-    })
-  })
-  return { transcript, perVariant: variants.map((v) => ({ variantId: v.id, ...perVariantMeta[v.id] })), groupDynamics: true, redTeam: true }
+function focusFor(variants, perVariantMeta, personas, campaign) {
+  const perVariant = variants.map((v) => ({ variantId: v.id, ...perVariantMeta[v.id] }))
+  const transcript = buildModeratedTranscript({ personas, variants, campaign, perVariant, lengthMins: 15, groupDynamics: true })
+  return { transcript, perVariant, groupDynamics: true, redTeam: true, lengthMins: 15 }
 }
 
 const SURVEY_INSTRUMENT = [
@@ -98,7 +87,7 @@ function buildProject1() {
     [`${id}-vA`]: { sentiment: 74, trust: 81, comprehension: 88, intentScore: 63, themes: ['Clarity of $0 fee', 'Trust in transparent terms', 'Approachable for first-timers'], standoutReactions: ['Value-conscious members appreciated seeing the APR up front'], objections: ['Wants reassurance about credit-limit size'], comprehensionGaps: [] },
     [`${id}-vB`]: { sentiment: 69, trust: 48, comprehension: 61, intentScore: 58, themes: ['Aspirational tone lands emotionally', 'Skepticism about "guaranteed approval"', 'Urgency felt pushy'], standoutReactions: ['Several flagged "guaranteed approval" as too good to be true'], objections: ['Distrust of the approval promise', 'No mention of fees or APR'], comprehensionGaps: [{ term: 'APR / fees', issue: 'No rate or fee shown; multiple personas assumed it was free or fixed-rate.' }] },
   }
-  const focusGroup = focusFor(variants, perVariantMeta, personas)
+  const focusGroup = focusFor(variants, perVariantMeta, personas, { product })
 
   const survey = buildSurvey(id, variants, segments, [], {
     [`${id}-vA`]: { top2box: 71, comprehensionRate: 86, applyIntent: 41, prefShare: 56 },
@@ -170,7 +159,7 @@ function buildProject2() {
     [`${id}-vA`]: { sentiment: 70, trust: 78, comprehension: 84, intentScore: 60, themes: ['"Judgment-free" reduces shame', 'Bureau reporting builds trust', 'Refundable deposit reassures'], standoutReactions: ['Rebuilders valued the non-judgmental tone'], objections: ['Wants to know minimum deposit'], comprehensionGaps: [] },
     [`${id}-vB`]: { sentiment: 58, trust: 34, comprehension: 52, intentScore: 47, themes: ['"Overnight" felt unrealistic', '"No credit check" raised suspicion', '"Save thousands" not believable'], standoutReactions: ['Skeptical members distrusted the speed claims'], objections: ['Distrust of overnight repair', 'Unsubstantiated savings'], comprehensionGaps: [{ term: 'Credit-building timeline', issue: 'Implied instant results; rebuilding reports over months, not overnight.' }] },
   }
-  const focusGroup = focusFor(variants, perVariantMeta, personas)
+  const focusGroup = focusFor(variants, perVariantMeta, personas, { product })
 
   const survey = buildSurvey(id, variants, segments, [], {
     [`${id}-vA`]: { top2box: 68, comprehensionRate: 83, applyIntent: 44, prefShare: 63 },

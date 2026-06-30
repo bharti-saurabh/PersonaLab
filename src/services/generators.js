@@ -188,47 +188,50 @@ Generate ${n} personas. Return a JSON array of objects with keys: name, age (num
 // =====================================================================
 export async function runFocusGroup({ settings, personas, variants, campaign, options = {} }) {
   const sample = personas.slice(0, Math.min(personas.length, 12))
+  const lengthMins = options.lengthMins === 30 ? 30 : 15
+  const turnTarget = lengthMins === 30 ? 110 : 60
+  const gd = options.groupDynamics !== false
   if (hasKey(settings)) {
     try {
       const data = await callLLMJson({
         settings,
         temperature: settings.temperature ?? 0.85,
-        maxTokens: 4000,
-        system: 'You are a neutral market-research moderator running a synthetic focus group for a regulated credit-card issuer. Personas react in character. Paraphrase reactions; never fabricate quotes attributed to real people. CRITICAL: detect any case where a persona misreads a material term (APR, fees, deposit, intro period) — that is both a conversion risk and a compliance signal.',
+        maxTokens: lengthMins === 30 ? 12000 : 8000,
+        system: 'You are a professional market-research moderator running a REALISTIC, full-length synthetic focus group for a regulated credit-card issuer. Produce an actual moderated discussion transcript: the moderator opens, sets ground rules, presents each concept, and actively moderates — asking open questions, follow-up probes, inviting quieter participants by name, surfacing agreement and disagreement between participants, checking comprehension of material terms, and closing with an apply-intent go-around. Personas speak in character (use their voice, archetype, and key objection). Paraphrase; never fabricate quotes attributed to real people. CRITICAL: when a persona misreads a material term (APR, fees, deposit, intro period), show it in the dialogue and have the moderator gently clarify — that misread is both a conversion risk and a compliance signal.',
         prompt: `Campaign: ${PRODUCTS_BY_ID[campaign.product]?.name}, objective ${campaign.objective}.
-Group dynamics (agreement/pushback) enabled: ${options.groupDynamics !== false}.
-Personas: ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, objection: p.keyObjection })))}
+Run the session as if it lasts about ${lengthMins} minutes. Group dynamics (agreement/pushback) enabled: ${gd}.
+Personas (every one must participate MULTIPLE times across the discussion): ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, objection: p.keyObjection })))}
 Variants: ${JSON.stringify(variants.map((v) => ({ id: v.id, name: v.name, headline: v.headline, primaryText: v.primaryText, valueProp: v.valueProp })))}
 
 Return JSON: {
- "transcript": [{"variantId","personaName","text","intentLabel":"would apply|might apply|would not apply"}],
+ "transcript": [{"role":"moderator"|"persona","speaker": <"Moderator" or the persona name>,"variantId": <variant id being discussed, or null for opening/closing/general>,"phase": <short label e.g. "Opening","First impressions","Trust","Comprehension","Objections","Comparison","Closing">,"text": <1-3 natural sentences>,"intentLabel": <ONLY on persona apply-intent statements: "would apply"|"might apply"|"would not apply"; otherwise null>}],
  "perVariant": [{"variantId","sentiment":0-100,"trust":0-100,"comprehension":0-100,"intentScore":0-100,"themes":[..],"standoutReactions":[..],"objections":[..],"comprehensionGaps":[{"term","issue"}]}]
 }
-Keep transcript to ~2-3 reactions per variant. comprehensionGaps must list any misread material term.`,
+Make the transcript LONG, natural, and complete — aim for at least ${turnTarget} turns, with moderator turns interleaved throughout (roughly one moderator turn for every 2-4 participant turns). Cover every variant, then a head-to-head comparison, then a closing intent round. comprehensionGaps must list any misread material term.`,
       })
       return normalizeFocus(data, variants)
     } catch (e) { /* fall back */ }
   }
-  return syntheticFocus({ personas: sample, variants, campaign })
+  return syntheticFocus({ personas: sample, variants, campaign, lengthMins, groupDynamics: gd })
 }
 
 // Moderator steers the live discussion in a new direction; returns a short round
 // of additional in-character reactions that engage the directive.
 export async function steerFocusGroup({ settings, directive, personas, variants, campaign }) {
-  const sample = personas.slice(0, Math.min(personas.length, 6))
+  const sample = personas.slice(0, Math.min(personas.length, 8))
   if (hasKey(settings)) {
     try {
       const data = await callLLMJson({
         settings,
         temperature: settings.temperature ?? 0.9,
-        maxTokens: 1600,
-        system: 'You are the moderator of a synthetic focus group for a regulated credit-card issuer. The moderator is steering the discussion in a new direction. Personas respond in character to the moderator prompt. Paraphrase reactions; never fabricate quotes attributed to real people. Flag any misread material term (APR, fees, deposit, intro period).',
+        maxTokens: 2400,
+        system: 'You are the moderator of a synthetic focus group for a regulated credit-card issuer. The moderator is steering the live discussion in a new direction. First the moderator poses the steer to the room, then several personas respond in character (one after another, some agreeing, some pushing back). Paraphrase reactions; never fabricate quotes attributed to real people. Flag any misread material term (APR, fees, deposit, intro period).',
         prompt: `Moderator steer: "${directive}".
 Campaign: ${PRODUCTS_BY_ID[campaign.product]?.name || 'card'}, objective ${campaign.objective}.
-Personas: ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, objection: p.keyObjection })))}
+Personas: ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, objection: p.keyObjection })))}
 Variants: ${JSON.stringify(variants.map((v) => ({ id: v.id, name: v.name, headline: v.headline, valueProp: v.valueProp })))}
-Return JSON: {"transcript":[{"variantId","personaName","text","intentLabel":"would apply|might apply|would not apply"}]}
-Give 3-6 reactions that directly engage the moderator's steer. Keep each reaction to 1-2 sentences.`,
+Return JSON: {"transcript":[{"role":"moderator"|"persona","speaker":<"Moderator" or persona name>,"variantId":<id or null>,"text":<1-2 sentences>,"intentLabel":<persona apply-intent only, else null>}]}
+Start with ONE moderator turn that frames the steer to the group, then 4-8 persona turns that directly engage it.`,
       })
       return (data.transcript || []).map((t) => ({ ...t, steer: directive }))
     } catch (e) { /* fall back */ }
@@ -276,19 +279,21 @@ function steerLine(topic, p, v, positive) {
 
 function syntheticSteer({ directive, personas, variants, campaign }) {
   const topic = steerTopic(directive)
-  const out = []
-  variants.forEach((v) => {
-    const r = rng(hash(v.id + directive))
-    const picks = personas.slice(0, 1 + Math.floor(r() * 2) + 1)
-    picks.forEach((p) => {
-      const positive = p.archetype !== 'skeptical' && r() > 0.4
-      out.push({
-        variantId: v.id,
-        personaName: p.name,
-        text: steerLine(topic, p, v, positive),
-        intentLabel: p.archetype === 'skeptical' ? 'might apply' : positive ? 'would apply' : 'might apply',
-        steer: directive,
-      })
+  const r = rng(hash('steer' + directive))
+  const out = [{ role: 'moderator', speaker: 'Moderator', personaName: 'Moderator', variantId: null, text: `Let me pick up on something. ${directive}. I want to go around — be honest, even if you disagree with each other.`, steer: directive }]
+  // a rotating cast responds across the variants
+  const cast = personas.slice(0, Math.min(personas.length, 6))
+  cast.forEach((p, i) => {
+    const v = variants[i % variants.length]
+    const positive = p.archetype !== 'skeptical' && r() > 0.4
+    out.push({
+      role: 'persona',
+      speaker: p.name,
+      personaName: p.name,
+      variantId: v.id,
+      text: steerLine(topic, p, v, positive),
+      intentLabel: p.archetype === 'skeptical' ? 'might apply' : positive ? 'would apply' : 'might apply',
+      steer: directive,
     })
   })
   return out
@@ -434,30 +439,125 @@ function normalizeFocus(data, variants) {
   }))
   // ensure every variant present
   variants.forEach((v) => { if (!perVariant.find((x) => x.variantId === v.id)) perVariant.push({ variantId: v.id, sentiment: 55, trust: 55, comprehension: 65, intentScore: 45, themes: [], standoutReactions: [], objections: [], comprehensionGaps: [] }) })
-  return { transcript: data.transcript || [], perVariant }
+  const transcript = (data.transcript || []).map((t) => {
+    const role = t.role === 'moderator' ? 'moderator' : 'persona'
+    const speaker = t.speaker || t.personaName || (role === 'moderator' ? 'Moderator' : 'Participant')
+    return {
+      role, speaker, personaName: speaker,
+      variantId: t.variantId ?? null,
+      phase: t.phase || null,
+      text: t.text || '',
+      intentLabel: role === 'persona' ? (t.intentLabel || undefined) : undefined,
+    }
+  })
+  return { transcript, perVariant }
 }
 
-function syntheticFocus({ personas, variants, campaign }) {
-  const transcript = []
+// ---- Deterministic FULL moderated focus-group transcript (no API key) ----
+function fn(p) { return (p.name || 'Participant').split(' ')[0] }
+
+function personaScores(p, v, base) {
+  const r = rng(hash(p.id + v.id))
+  const lift = p.archetype === 'core' ? 12 : p.archetype === 'skeptical' ? -16 : 0
+  const s = clampInt(base.sentiment + lift + (r() * 16 - 8), 8, 96)
+  return { s, warm: s > 62, cool: s < 42, r }
+}
+function intentFor(p, v, base) {
+  const { s } = personaScores(p, v, base)
+  if (p.archetype === 'skeptical') return s > 70 ? 'might apply' : 'would not apply'
+  return s > 60 ? 'would apply' : s > 40 ? 'might apply' : 'would not apply'
+}
+
+function impressionLine(p, v) {
+  const vp = (v.valueProp || 'the offer').toLowerCase()
+  const A = {
+    core: [
+      `Honestly, my first reaction is positive — “${v.headline}” is clear and it speaks to ${vp} right away.`,
+      `I like it. It feels like it's actually for someone like me, and ${vp} is exactly what I care about.`,
+      `That headline lands for me. I'd at least want to read more, which is more than I can say for most card ads.`,
+    ],
+    adjacent: [
+      `It's fine — the headline is clear enough, though I'd want to know what's behind ${vp} before I get excited.`,
+      `My gut says “okay, maybe.” It reads clean, but I've seen a lot of cards promise ${vp}.`,
+      `Neutral, leaning curious. “${v.headline}” gets my attention but I'm reserving judgment.`,
+    ],
+    skeptical: [
+      `My very first thought is “what's the catch?” Anything that leads with ${vp} usually has a fee hiding somewhere.`,
+      `I'm immediately suspicious. “${v.headline}” sounds nice, but nice is how they get you.`,
+      `I read that and my guard goes up. Show me the fine print before you show me ${vp}.`,
+    ],
+  }
+  return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'imp')))
+}
+function trustLine(p, v) {
+  const A = {
+    core: [`I'm inclined to believe it, honestly. Capital One's a known name, so I'd give it the benefit of the doubt.`,
+      `It doesn't feel scammy to me. I'd trust it enough to apply and read the terms as I go.`],
+    adjacent: [`I half-believe it. I'd want to see the actual numbers before I fully buy in.`,
+      `It's believable, but “${(v.valueProp || 'the benefit').toLowerCase()}” is doing a lot of work. What's the trade-off?`],
+    skeptical: [`No, I don't believe it — not at face value. There's always a fee or a rate that kicks in later.`,
+      `This is exactly the kind of thing that sounds too good to be true, so I assume it is until proven otherwise.`,
+      `My objection is simple: ${(p.keyObjection || 'hidden fees').toLowerCase()}. Until that's addressed, I'm out.`],
+  }
+  return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'trust')))
+}
+function compLine(p, v, misread) {
+  if (misread) {
+    return p.financialLiteracy === 'low'
+      ? `So the 0% — that's just forever, right? Once I have the card the rate stays low? (assumes the intro APR is permanent)`
+      : `Wait — does the intro rate become a higher APR after a while, or is the low rate the ongoing one? It's not jumping out at me.`
+  }
+  return p.financialLiteracy === 'high'
+    ? `I read it as: intro period, then a variable go-to APR based on creditworthiness, and the annual fee is what it says. That part's clear to me.`
+    : `I think I get it — there's an intro period and then a regular rate, and I'd double-check the fee before applying.`
+}
+function objectionLine(p, v) {
+  const obj = (p.keyObjection || 'hidden fees').toLowerCase()
+  const A = {
+    core: [`The one thing that'd stop me is if ${obj} turned out to be true once I read the terms.`,
+      `Not much hesitation for me — maybe just confirming there's no surprise fee.`],
+    adjacent: [`What holds me back is ${obj}. Clear that up and I'm probably in.`,
+      `I'd hesitate until I saw how “${(v.valueProp || 'the benefit').toLowerCase()}” actually pays off for me specifically.`],
+    skeptical: [`My hesitation is everything — ${obj}, the rate after the intro, whether the rewards have caps. All of it.`,
+      `I won't apply until someone shows me there's no penalty buried in here. ${obj} is my line.`],
+  }
+  return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'obj')))
+}
+function intentLineText(p, v, label) {
+  if (label === 'would apply') return `For me it's a “probably” — I'd apply, assuming the terms match the pitch.`
+  if (label === 'would not apply') return `Honestly, “probably not.” It'd take a clearer guarantee on the fees before I'd move.`
+  return `I'm a “might.” Interested, but I'd need to compare it against my current card first.`
+}
+
+const MOD = {
+  open: (n, prod) => `Thanks for being here, everyone. I'm your moderator. Over the next little while we'll look at a few ${prod} concepts and I want your honest, gut-level reactions — there are no right or wrong answers, and nothing you say leaves this room. Let's warm up: in a sentence, how do you generally feel when a credit-card offer shows up in your feed?`,
+  introInvite: (name) => `${name}, want to kick us off?`,
+  present: (v, i) => `Great, thank you. Let's put up the ${i === 0 ? 'first' : i === 1 ? 'next' : 'next'} concept. The headline reads: “${v.headline}.” It's built around ${(v.valueProp || 'its core benefit').toLowerCase()}. Take a second — what's the very first thing that goes through your head?`,
+  probeTrust: `Let me push on that. Be honest with me — do you actually believe it? Does anything here feel too good to be true, like there's a catch?`,
+  probeComp: `I want to make sure we're all reading this the same way. In your own words: what happens to the interest rate after any intro period, and is there a fee?`,
+  clarify: `Good — and that's an important one to flag. To be clear, the intro rate isn't permanent; after the intro period it moves to a variable go-to APR, and the fee is disclosed in the terms. That distinction matters a lot for what you'd actually pay.`,
+  probeObj: `So what would actually stop you from applying? Where's the hesitation?`,
+  push: (a, b) => `${a}, ${b} just made a point you seemed to react to — do you agree, or do you see it differently?`,
+  agree: (other) => `I'm with ${other} on this, actually — same instinct.`,
+  disagree: (other) => `I'd push back on ${other} a little. I don't think it's as clear-cut as that.`,
+  transition: `Really helpful, thank you. Let's switch gears to the next concept.`,
+  compare: `Now that you've all seen both, I want to go around: which one actually speaks to you more, and why? Be specific.`,
+  compareLine: (p, v) => p.archetype === 'skeptical'
+    ? `If I had to pick, “${v.name}” — only because it felt slightly less like it was hiding something.`
+    : `“${v.name}” for me. It just felt more like it was talking to my situation.`,
+  closeAsk: `Last thing, and then I'll let you go. Going around the room: on a scale from “definitely not” to “definitely,” how likely are you to actually apply — and what's the one thing that would move you up a notch?`,
+  close: `That is genuinely useful. Thank you all for your time and your candor today.`,
+}
+
+function syntheticFocus({ personas, variants, campaign, lengthMins = 15, groupDynamics = true }) {
+  // --- perVariant signal (same model as before) ---
   const perVariant = variants.map((v) => {
     const r = rng(hash(v.id + 'fg'))
     const sentiment = clampInt(45 + r() * 45, 10, 95)
     const trust = clampInt(sentiment - 5 + r() * 20 - 10, 10, 95)
     const comprehension = clampInt(60 + r() * 35, 25, 99)
     const intentScore = clampInt(sentiment * 0.7 + r() * 15, 5, 85)
-    // a comprehension gap appears when comprehension is low
     const gaps = comprehension < 70 ? [{ term: 'APR after intro period', issue: 'Several personas assumed the intro rate was permanent.' }] : []
-    personas.slice(0, 3).forEach((p) => {
-      const intent = p.archetype === 'skeptical' ? 'might apply' : intentScore > 55 ? 'would apply' : 'might apply'
-      transcript.push({
-        variantId: v.id,
-        personaName: p.name,
-        text: p.archetype === 'skeptical'
-          ? `Reads it carefully and questions whether there are hidden fees; wants the APR and any deposit spelled out before trusting it.`
-          : `Responds to the ${v.valueProp || 'value'}; finds it ${sentiment > 60 ? 'clear and appealing' : 'a bit generic'} and would want to confirm the terms.`,
-        intentLabel: intent,
-      })
-    })
     return {
       variantId: v.id, sentiment, trust, comprehension, intentScore,
       themes: ['Clarity of value prop', sentiment > 60 ? 'Trust in terms' : 'Skepticism about fees', 'Relevance to my situation'],
@@ -466,7 +566,123 @@ function syntheticFocus({ personas, variants, campaign }) {
       comprehensionGaps: gaps,
     }
   })
+  const transcript = buildModeratedTranscript({ personas, variants, campaign, perVariant, lengthMins, groupDynamics })
   return { transcript, perVariant }
+}
+
+// Builds a full, realistic moderated focus-group transcript from already-computed
+// perVariant signal. Exported so seed demos can reuse it with their own numbers.
+export function buildModeratedTranscript({ personas, variants, campaign = {}, perVariant, lengthMins = 15, groupDynamics = true }) {
+  const prod = (PRODUCTS_BY_ID[campaign.product]?.name || 'credit-card').toLowerCase()
+  const long = lengthMins === 30
+  const cast = personas.slice(0, Math.min(personas.length, long ? 8 : 6))
+  const transcript = []
+  const push = (role, speaker, text, extra = {}) => transcript.push({ role, speaker, personaName: speaker, variantId: extra.variantId ?? null, phase: extra.phase || null, text, intentLabel: extra.intentLabel })
+  const baseOf = (v) => perVariant.find((x) => x.variantId === v.id) || { sentiment: 55, comprehension: 70, intentScore: 50 }
+
+  // --- OPENING ---
+  push('moderator', 'Moderator', MOD.open(cast.length, prod), { phase: 'Opening' })
+  const introCast = long ? cast : cast.slice(0, Math.min(cast.length, 4))
+  const INTRO = {
+    skeptical: [
+      `Honestly? Skeptical. I assume there's a catch until I see the fine print.`,
+      `Wary — I've been burned before, so my default is "what aren't they telling me?"`,
+      `I usually scroll right past them. They all sound the same and I don't trust the promises.`,
+    ],
+    core: [
+      (p) => `I actually pay attention to them — I'm always looking for ${(p.goals || 'a better deal').toLowerCase()}.`,
+      () => `Pretty open, honestly. If the offer's good and clear, I'll read the whole thing.`,
+      () => `Interested, generally. I like comparing what's out there before I commit.`,
+    ],
+    adjacent: [
+      `Depends on the offer. Most I ignore, but a good one will get me to read.`,
+      `Mixed — I don't seek them out, but I'll stop if the headline actually says something.`,
+      `Cautiously curious. I'll look, but I need it to feel relevant to me.`,
+    ],
+  }
+  introCast.forEach((p, i) => {
+    if (i === 0) push('moderator', 'Moderator', MOD.introInvite(fn(p)), { phase: 'Opening' })
+    const bank = INTRO[p.archetype] || INTRO.adjacent
+    const entry = bank[i % bank.length]
+    push('persona', p.name, typeof entry === 'function' ? entry(p) : entry, { phase: 'Opening' })
+  })
+
+  // --- PER-VARIANT DISCUSSION ---
+  variants.forEach((v, vi) => {
+    const base = baseOf(v)
+    const phaseTag = `Concept ${String.fromCharCode(65 + vi)}`
+    push('moderator', 'Moderator', MOD.present(v, vi), { variantId: v.id, phase: phaseTag })
+
+    // First impressions — most of the room
+    const impressionCast = long ? cast : cast.slice(0, 5)
+    impressionCast.forEach((p) => push('persona', p.name, impressionLine(p, v), { variantId: v.id, phase: `${phaseTag} · First impressions` }))
+
+    // Group dynamics: one agrees, one pushes back
+    if (groupDynamics && impressionCast.length >= 3) {
+      const a = impressionCast[2], other = impressionCast[0]
+      push('moderator', 'Moderator', MOD.push(fn(a), fn(other)), { variantId: v.id, phase: `${phaseTag} · First impressions` })
+      const r = rng(hash(a.id + v.id + 'gd'))
+      push('persona', a.name, (r() > 0.5 ? MOD.agree(fn(other)) + ' ' + impressionLine(a, v) : MOD.disagree(fn(other)) + ' ' + trustLine(a, v)), { variantId: v.id, phase: `${phaseTag} · First impressions` })
+    }
+
+    // Trust probe
+    push('moderator', 'Moderator', MOD.probeTrust, { variantId: v.id, phase: `${phaseTag} · Trust` })
+    const trustCast = (long ? cast : cast.slice(0, 4)).filter((p) => p.archetype !== 'core' || rng(hash(p.id + 'tc'))() > 0.4)
+    ;(trustCast.length ? trustCast : cast.slice(0, 3)).forEach((p) => push('persona', p.name, trustLine(p, v), { variantId: v.id, phase: `${phaseTag} · Trust` }))
+
+    // Comprehension probe — surfaces the misread when comprehension is low
+    push('moderator', 'Moderator', MOD.probeComp, { variantId: v.id, phase: `${phaseTag} · Comprehension` })
+    const misreader = cast.find((p) => p.financialLiteracy === 'low') || cast.find((p) => p.archetype === 'skeptical') || cast[cast.length - 1]
+    const compCast = long ? cast.slice(0, 4) : cast.slice(0, 3)
+    compCast.forEach((p) => {
+      const misread = base.comprehension < 70 && p === misreader
+      push('persona', p.name, compLine(p, v, misread), { variantId: v.id, phase: `${phaseTag} · Comprehension` })
+    })
+    if (base.comprehension < 70) push('moderator', 'Moderator', MOD.clarify, { variantId: v.id, phase: `${phaseTag} · Comprehension` })
+
+    // Objections probe
+    push('moderator', 'Moderator', MOD.probeObj, { variantId: v.id, phase: `${phaseTag} · Objections` })
+    const objCast = long ? cast.slice(0, 5) : cast.slice(0, 3)
+    objCast.forEach((p) => push('persona', p.name, objectionLine(p, v), { variantId: v.id, phase: `${phaseTag} · Objections` }))
+
+    // Deeper dig (long sessions): moderator asks what would move a "no" to a "yes"
+    if (long) {
+      push('moderator', 'Moderator', `Say I could fix one thing. What's the single change that would move you from a "no" or a "maybe" to a "yes"?`, { variantId: v.id, phase: `${phaseTag} · Objections` })
+      cast.slice(0, 4).forEach((p) => {
+        const obj = (p.keyObjection || 'the fees').toLowerCase()
+        const line = p.archetype === 'skeptical'
+          ? `Put the actual numbers right next to the promise — show me ${obj} can't bite me, and I'd reconsider.`
+          : p.archetype === 'core'
+            ? `Honestly not much — maybe just a line confirming there's no surprise on ${obj} and I'm in.`
+            : `If it spelled out exactly how "${(v.valueProp || 'the benefit').toLowerCase()}" applies to someone like me, that'd tip me over.`
+        push('persona', p.name, line, { variantId: v.id, phase: `${phaseTag} · Objections` })
+      })
+    }
+
+    if (vi < variants.length - 1) push('moderator', 'Moderator', MOD.transition, { phase: phaseTag })
+  })
+
+  // --- COMPARISON ---
+  if (variants.length >= 2) {
+    push('moderator', 'Moderator', MOD.compare, { phase: 'Comparison' })
+    const compareCast = long ? cast : cast.slice(0, 5)
+    compareCast.forEach((p) => {
+      const r = rng(hash(p.id + 'cmp'))
+      const choice = variants[Math.floor(r() * variants.length)]
+      push('persona', p.name, MOD.compareLine(p, choice), { variantId: choice.id, phase: 'Comparison' })
+    })
+  }
+
+  // --- CLOSING intent round ---
+  push('moderator', 'Moderator', MOD.closeAsk, { phase: 'Closing' })
+  cast.forEach((p) => {
+    const top = [...variants].sort((a, b) => baseOf(b).intentScore - baseOf(a).intentScore)[0]
+    const label = intentFor(p, top, baseOf(top))
+    push('persona', p.name, intentLineText(p, top, label), { variantId: top.id, phase: 'Closing', intentLabel: label })
+  })
+  push('moderator', 'Moderator', MOD.close, { phase: 'Closing' })
+
+  return transcript
 }
 
 function defaultSurvey(variants) {

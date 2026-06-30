@@ -9,24 +9,24 @@ import { exportCSV, exportJSON, printReport } from '../utils/export.js'
 import {
   MessagesSquare, Wand2, AlertTriangle, FileDown, Quote, MessageCircle, ShieldCheck,
   BookOpen, Sparkles, TrendingUp, Trophy, Play, Send, ListChecks, Users, Megaphone,
-  CornerDownRight, ArrowRight, RotateCcw, Gauge,
+  CornerDownRight, ArrowRight, RotateCcw, Gauge, Mic, FastForward, Clock,
 } from 'lucide-react'
 
 const INTENT_COLOR = { 'would apply': 'emerald', 'might apply': 'amber', 'would not apply': 'rose' }
 
 const AGENDA = [
-  { icon: Sparkles, label: 'First impressions & emotional response' },
-  { icon: ShieldCheck, label: 'Trust & credibility of the offer' },
+  { icon: Sparkles, label: 'Warm-up & first impressions' },
+  { icon: ShieldCheck, label: 'Trust & credibility — “is there a catch?”' },
   { icon: BookOpen, label: 'Comprehension of material terms (APR, fees, intro period)' },
-  { icon: AlertTriangle, label: 'Objections & points of confusion' },
-  { icon: TrendingUp, label: 'Apply intent & what would move it' },
+  { icon: AlertTriangle, label: 'Objections & what’s holding people back' },
+  { icon: TrendingUp, label: 'Head-to-head comparison & closing apply-intent round' },
 ]
 
 const STEER_SUGGESTIONS = [
   'Push them harder on the annual fee',
   'Probe trust — does it feel like there’s a catch?',
   'Test comprehension of the APR after the intro period',
-  'Focus on what would make them actually apply',
+  'Ask what would actually make them apply',
 ]
 
 const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)))
@@ -36,18 +36,18 @@ function scoreRisk(v) { return v >= 67 ? 'low' : v >= 40 ? 'medium' : 'high' }
 
 function summarize(entries, pv, variants) {
   const counts = { 'would apply': 0, 'might apply': 0, 'would not apply': 0 }
-  entries.forEach((e) => { counts[e.intentLabel] = (counts[e.intentLabel] || 0) + 1 })
+  entries.forEach((e) => { if (e.role !== 'moderator' && e.intentLabel && counts[e.intentLabel] != null) counts[e.intentLabel] += 1 })
   const seenIds = uniq(entries.map((e) => e.variantId))
   const seenPv = pv.filter((v) => seenIds.includes(v.variantId))
   const themes = uniq(seenPv.flatMap((v) => v.themes || [])).slice(0, 5)
   const objections = uniq(seenPv.flatMap((v) => v.objections || [])).slice(0, 4)
   const gaps = uniq(seenPv.flatMap((v) => (v.comprehensionGaps || []).map((g) => g.term)))
-  const total = entries.length
-  const lean = !total ? '—'
+  const total = counts['would apply'] + counts['might apply'] + counts['would not apply']
+  const lean = !total ? 'Listening…'
     : counts['would apply'] >= counts['might apply'] && counts['would apply'] >= counts['would not apply'] ? 'Leaning apply'
     : counts['would not apply'] > counts['would apply'] ? 'Leaning away'
     : 'Mixed / cautious'
-  return { counts, themes, objections, gaps, total, lean, variantsSeen: seenIds.length }
+  return { counts, themes, objections, gaps, total, lean, variantsSeen: seenIds.filter(Boolean).length }
 }
 
 export default function Step5FocusGroup() {
@@ -60,6 +60,7 @@ export default function Step5FocusGroup() {
   const [phase, setPhase] = useState(fg ? 'done' : 'setup') // setup | live | done
   const [groupDynamics, setGroupDynamics] = useState(fg?.groupDynamics ?? true)
   const [redTeam, setRedTeam] = useState(fg?.redTeam ?? true)
+  const [lengthMins, setLengthMins] = useState(fg?.lengthMins ?? 15)
 
   const [fullTranscript, setFullTranscript] = useState(fg?.transcript || [])
   const [perVariant, setPerVariant] = useState(fg?.perVariant || [])
@@ -70,30 +71,32 @@ export default function Step5FocusGroup() {
 
   const ready = personas.length > 0 && variants.length >= 2
   const variantName = (id) => variants.find((v) => v.id === id)?.name || 'Variant'
-  const variantIndex = (id) => Math.max(0, variants.findIndex((v) => v.id === id))
 
-  // Stream the transcript in one entry at a time while live.
+  // Stream the transcript one turn at a time while live (moderator turns linger a touch longer).
   useEffect(() => {
     if (phase !== 'live' || shown >= fullTranscript.length) return
-    const t = setTimeout(() => setShown((s) => s + 1), 650)
+    const role = fullTranscript[shown]?.role
+    const t = setTimeout(() => setShown((s) => s + 1), role === 'moderator' ? 560 : 380)
     return () => clearTimeout(t)
-  }, [phase, shown, fullTranscript.length])
+  }, [phase, shown, fullTranscript])
 
   const streaming = phase === 'live' && shown < fullTranscript.length
   const shownEntries = useMemo(() => fullTranscript.slice(0, shown), [fullTranscript, shown])
   const summary = useMemo(() => summarize(shownEntries, perVariant, variants), [shownEntries, perVariant, variants])
+  const mockMinute = fullTranscript.length ? Math.min(lengthMins, Math.max(1, Math.round((shown / fullTranscript.length) * lengthMins))) : 0
 
   const initiate = async () => {
     const out = await gen.run({
       steps: [
         'Seating the synthetic panel…',
-        'Moderator opening the discussion…',
+        'Moderator opening the session & setting ground rules…',
         `Personas reacting in character${redTeam ? ' (incl. red-team reviewers)' : ''}…`,
         'Probing trust & material-term comprehension…',
         groupDynamics ? 'Letting the group agree & push back…' : 'Capturing individual reactions…',
+        'Running the comparison & closing intent round…',
       ],
-      work: async () => runFocusGroup({ settings, personas, variants, campaign: project.campaign, options: { groupDynamics } }),
-      minMs: 2200,
+      work: async () => runFocusGroup({ settings, personas, variants, campaign: project.campaign, options: { groupDynamics, lengthMins } }),
+      minMs: 2400,
     })
     setPerVariant(out.perVariant)
     setFullTranscript(out.transcript)
@@ -118,19 +121,19 @@ export default function Step5FocusGroup() {
     }
   }
 
+  const skipToEnd = () => setShown(fullTranscript.length)
   const conclude = () => {
     setShown(fullTranscript.length)
-    update({ focusGroup: { transcript: fullTranscript, perVariant, groupDynamics, redTeam, steerLog } })
+    update({ focusGroup: { transcript: fullTranscript, perVariant, groupDynamics, redTeam, lengthMins, steerLog } })
     setPhase('done')
   }
-
   const rerun = () => { setPhase('setup'); setShown(0) }
 
   const exportTranscript = () => {
-    const rows = (fullTranscript || []).map((t) => ({ variant: variantName(t.variantId), persona: t.personaName, intent: t.intentLabel, steer: t.steer || '', reaction: t.text }))
+    const rows = (fullTranscript || []).map((t) => ({ speaker: t.speaker || t.personaName, role: t.role || 'persona', phase: t.phase || '', variant: t.variantId ? variantName(t.variantId) : '', intent: t.intentLabel || '', steer: t.steer || '', text: t.text }))
     exportCSV(rows, `focus-group-transcript-${project.id}.csv`)
   }
-  const exportSynthesis = () => exportJSON({ groupDynamics, redTeam, steerLog, perVariant }, `focus-group-synthesis-${project.id}.json`)
+  const exportSynthesis = () => exportJSON({ groupDynamics, redTeam, lengthMins, steerLog, perVariant }, `focus-group-synthesis-${project.id}.json`)
 
   if (!ready) {
     return (
@@ -151,24 +154,10 @@ export default function Step5FocusGroup() {
   const pv = perVariant
   const sentimentLeader = pv.length ? [...pv].sort((a, b) => b.intentScore - a.intentScore)[0] : null
 
-  // ---- Build the chronological live feed with moderator context headers ----
-  const feed = []
-  {
-    let prevVariant = null, prevSteer = null
-    shownEntries.forEach((e, i) => {
-      if (e.steer) {
-        if (e.steer !== prevSteer) { feed.push({ type: 'steer', directive: e.steer, key: `s${i}` }); prevSteer = e.steer; prevVariant = null }
-      } else if (e.variantId !== prevVariant) {
-        feed.push({ type: 'variant', variantId: e.variantId, key: `v${i}` }); prevVariant = e.variantId; prevSteer = null
-      }
-      feed.push({ type: 'line', e, key: `l${i}` })
-    })
-  }
-
   return (
     <div className="space-y-6">
       <SectionTitle icon={MessagesSquare} title="Synthetic Focus Group"
-        subtitle="A moderator agent runs a structured discussion; personas react in character, you can steer, then we synthesize the signal."
+        subtitle="A full moderated session — the moderator runs the room, every persona participates, you can steer live, then we synthesize the signal."
         right={
           phase === 'done' && (
             <div className="flex gap-2">
@@ -189,7 +178,7 @@ export default function Step5FocusGroup() {
                 <h3 className="font-bold text-ink-900">Discussion agenda</h3>
                 <Badge color="brand" className="ml-1">{AGENDA.length} topics</Badge>
               </div>
-              <p className="text-xs text-ink-400 mb-4">The moderator will guide the panel through these topics in order. You can steer the conversation live once it’s underway.</p>
+              <p className="text-xs text-ink-400 mb-4">The moderator opens the session, then guides the panel through these topics for each concept — probing, inviting quieter voices, and surfacing disagreement. You can steer the conversation live once it’s underway.</p>
               <ol className="space-y-2.5">
                 {AGENDA.map((a, i) => (
                   <li key={i} className="flex items-center gap-3">
@@ -206,7 +195,21 @@ export default function Step5FocusGroup() {
                 <Gauge size={17} className="text-brand-600" />
                 <h3 className="font-bold text-ink-900">Key decisions</h3>
               </div>
-              <div className="space-y-3">
+
+              <div className="mb-3">
+                <div className="label flex items-center gap-1.5"><Clock size={13} /> Session length</div>
+                <div className="flex gap-1.5 mt-1">
+                  {[15, 30].map((m) => (
+                    <button key={m} onClick={() => setLengthMins(m)}
+                      className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold border transition ${lengthMins === m ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'}`}>
+                      ~{m} min
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-ink-400 mt-1">{lengthMins === 30 ? 'Longer session: more participants, deeper probing, fuller transcript.' : 'Standard session: a complete moderated discussion.'}</p>
+              </div>
+
+              <div className="space-y-3 pt-3 border-t border-ink-100">
                 <Toggle checked={groupDynamics} onChange={setGroupDynamics} label="Group dynamics (agreement & pushback)" />
                 <Toggle checked={redTeam} onChange={setRedTeam} label="Include red-team reviewers (skeptical consumer, advocate, compliance-minded reader)" />
               </div>
@@ -226,7 +229,7 @@ export default function Step5FocusGroup() {
 
           {gen.running ? (
             <GenConsole lines={gen.lines} title="Convening the synthetic focus group"
-              subtitle={`${personas.length} personas · ${variants.length} variants`} />
+              subtitle={`${personas.length} personas · ${variants.length} variants · ~${lengthMins} min`} />
           ) : (
             <div className="flex justify-center">
               <button className="btn-primary text-base px-7 py-3" onClick={initiate}>
@@ -251,52 +254,26 @@ export default function Step5FocusGroup() {
                     ? <Badge color="amber"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500 animate-blink" /> In session</Badge>
                     : <Badge color="emerald">Floor open</Badge>}
                 </div>
-                <span className="text-[11px] text-ink-400">{shown} / {fullTranscript.length} reactions</span>
+                <div className="flex items-center gap-3 text-[11px] text-ink-400">
+                  <span className="flex items-center gap-1"><Clock size={12} /> ~{mockMinute}/{lengthMins} min</span>
+                  <span>{shown}/{fullTranscript.length} turns</span>
+                  {streaming && <button className="btn-ghost !py-1 !px-2" onClick={skipToEnd}><FastForward size={13} /> Skip</button>}
+                </div>
               </div>
               <p className="text-xs text-ink-400 mb-4">Reactions are paraphrased by the moderator agent and are never attributed as real quotes from real people.</p>
 
-              <div className="space-y-3">
-                {feed.map((f) => {
-                  if (f.type === 'variant') {
-                    const vi = variantIndex(f.variantId)
-                    return (
-                      <div key={f.key} className="flex items-center gap-2 pt-1">
-                        <span className="grid place-items-center h-6 w-6 rounded text-white text-xs font-bold" style={{ backgroundColor: PALETTE[vi % PALETTE.length] }}>{String.fromCharCode(65 + vi)}</span>
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Now reviewing — {variantName(f.variantId)}</span>
-                        <span className="h-px flex-1 bg-ink-100" />
-                      </div>
-                    )
-                  }
-                  if (f.type === 'steer') {
-                    return (
-                      <div key={f.key} className="flex items-start gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 reveal">
-                        <Megaphone size={15} className="text-brand-600 mt-0.5 shrink-0" />
-                        <p className="text-sm text-brand-900"><span className="font-semibold">Moderator steers:</span> “{f.directive}”</p>
-                      </div>
-                    )
-                  }
-                  const { e } = f
-                  return (
-                    <div key={f.key} className="flex items-start justify-between gap-3 reveal">
-                      <p className="text-sm text-ink-700">
-                        <CornerDownRight size={13} className="inline text-ink-300 mr-1 -mt-0.5" />
-                        <span className="font-medium text-ink-900">{e.personaName}:</span> {e.text}
-                      </p>
-                      <Badge color={INTENT_COLOR[e.intentLabel] || 'ink'} className="shrink-0">{e.intentLabel}</Badge>
-                    </div>
-                  )
-                })}
-                {streaming && (
-                  <div className="flex items-center gap-2 text-xs text-ink-400 pl-5">
-                    <span className="flex gap-1">
-                      <span className="h-1.5 w-1.5 rounded-full bg-ink-300 animate-blink" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-ink-300 animate-blink" style={{ animationDelay: '150ms' }} />
-                      <span className="h-1.5 w-1.5 rounded-full bg-ink-300 animate-blink" style={{ animationDelay: '300ms' }} />
-                    </span>
-                    personas responding…
-                  </div>
-                )}
-              </div>
+              <TranscriptFeed entries={shownEntries} animate variantName={variantName} />
+
+              {streaming && (
+                <div className="flex items-center gap-2 text-xs text-ink-400 pl-5 mt-3">
+                  <span className="flex gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-ink-300 animate-blink" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-ink-300 animate-blink" style={{ animationDelay: '150ms' }} />
+                    <span className="h-1.5 w-1.5 rounded-full bg-ink-300 animate-blink" style={{ animationDelay: '300ms' }} />
+                  </span>
+                  the room is talking…
+                </div>
+              )}
             </Card>
 
             {/* Moderator steering */}
@@ -368,7 +345,7 @@ export default function Step5FocusGroup() {
             <button className="btn-primary w-full justify-center py-2.5" onClick={conclude} disabled={shown === 0}>
               Conclude &amp; analyze <ArrowRight size={16} />
             </button>
-            {streaming && <p className="text-[11px] text-ink-400 text-center">You can conclude now or wait for the panel to finish and steer further.</p>}
+            {streaming && <p className="text-[11px] text-ink-400 text-center">You can skip ahead, steer further, or conclude whenever you’re ready.</p>}
           </div>
         </div>
       )}
@@ -379,7 +356,7 @@ export default function Step5FocusGroup() {
           <div className="flex items-center justify-between flex-wrap gap-2 rounded-xl border border-ink-200 bg-ink-50/60 px-4 py-2.5 no-print">
             <div className="flex items-center gap-2 text-xs text-ink-500">
               <Badge color="brand">Discussion concluded</Badge>
-              <span>{fullTranscript.length} reactions · {variants.length} variants</span>
+              <span>{fullTranscript.length} turns · ~{lengthMins} min · {variants.length} variants</span>
               {steerLog.length > 0 && <span>· {steerLog.length} moderator steer{steerLog.length > 1 ? 's' : ''}</span>}
             </div>
             <button className="btn-ghost" onClick={rerun}><RotateCcw size={15} /> Re-run focus group</button>
@@ -484,38 +461,61 @@ export default function Step5FocusGroup() {
             <div className="flex items-center gap-2 mb-1">
               <Quote size={16} className="text-ink-500" />
               <h3 className="font-bold text-ink-900">Full discussion transcript</h3>
+              <Badge color="ink" className="ml-1">{fullTranscript.length} turns</Badge>
             </div>
-            <p className="text-xs text-ink-400 mb-4">Reactions are paraphrased by the moderator agent and are never attributed as real quotes from real people.</p>
-            <div className="space-y-5">
-              {variants.map((v, vi) => {
-                const entries = (fullTranscript || []).filter((t) => t.variantId === v.id)
-                if (!entries.length) return null
-                return (
-                  <div key={v.id}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="grid place-items-center h-6 w-6 rounded text-white text-xs font-bold" style={{ backgroundColor: PALETTE[vi % PALETTE.length] }}>{String.fromCharCode(65 + vi)}</span>
-                      <span className="font-semibold text-ink-800 text-sm">{v.name}</span>
-                    </div>
-                    <div className="space-y-2 border-l-2 border-ink-100 pl-3.5">
-                      {entries.map((t, i) => (
-                        <div key={i} className="flex items-start justify-between gap-3">
-                          <p className="text-sm text-ink-700">
-                            <span className="font-medium text-ink-900">{t.personaName}:</span> {t.text}
-                            {t.steer && <span className="ml-1.5 chip bg-brand-50 text-brand-600 align-middle">steered</span>}
-                          </p>
-                          <Badge color={INTENT_COLOR[t.intentLabel] || 'ink'} className="shrink-0">{t.intentLabel}</Badge>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+            <p className="text-xs text-ink-400 mb-4">The complete moderated session. Reactions are paraphrased by the moderator agent and are never attributed as real quotes from real people.</p>
+            <TranscriptFeed entries={fullTranscript} variantName={variantName} />
           </Card>
         </>
       )}
 
       <SyntheticBanner />
+    </div>
+  )
+}
+
+// ---- Shared chronological transcript renderer (moderator + participant turns, phase sections) ----
+function TranscriptFeed({ entries, animate = false, variantName }) {
+  const items = []
+  let prevPhase = null
+  entries.forEach((e, i) => {
+    if (e.phase && e.phase !== prevPhase) { items.push({ type: 'phase', label: e.phase, key: `p${i}` }); prevPhase = e.phase }
+    items.push({ type: 'turn', e, key: `t${i}` })
+  })
+  return (
+    <div className="space-y-2.5">
+      {items.map((it) => {
+        if (it.type === 'phase') {
+          return (
+            <div key={it.key} className="flex items-center gap-2 pt-2 first:pt-0">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-brand-600 bg-brand-50 rounded px-2 py-0.5">{it.label}</span>
+              <span className="h-px flex-1 bg-ink-100" />
+            </div>
+          )
+        }
+        const { e } = it
+        const cls = animate ? 'reveal' : ''
+        if (e.role === 'moderator') {
+          return (
+            <div key={it.key} className={`flex items-start gap-2 rounded-lg bg-brand-50/70 border border-brand-100 px-3 py-2 ${cls}`}>
+              <span className="grid place-items-center h-6 w-6 rounded-full bg-brand-600 text-white shrink-0 mt-0.5"><Mic size={12} /></span>
+              <p className="text-sm text-brand-900">
+                <span className="font-semibold">Moderator{e.steer ? ' (steer)' : ''}:</span> {e.text}
+              </p>
+            </div>
+          )
+        }
+        return (
+          <div key={it.key} className={`flex items-start justify-between gap-3 pl-1 ${cls}`}>
+            <p className="text-sm text-ink-700">
+              <CornerDownRight size={13} className="inline text-ink-300 mr-1 -mt-0.5" />
+              <span className="font-medium text-ink-900">{e.speaker || e.personaName}:</span> {e.text}
+              {e.steer && <span className="ml-1.5 chip bg-brand-50 text-brand-600 align-middle">steered</span>}
+            </p>
+            {e.intentLabel && <Badge color={INTENT_COLOR[e.intentLabel] || 'ink'} className="shrink-0">{e.intentLabel}</Badge>}
+          </div>
+        )
+      })}
     </div>
   )
 }
