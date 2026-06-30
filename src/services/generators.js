@@ -197,7 +197,7 @@ export async function runFocusGroup({ settings, personas, variants, campaign, op
         settings,
         temperature: settings.temperature ?? 0.85,
         maxTokens: lengthMins === 30 ? 12000 : 8000,
-        system: 'You are a professional market-research moderator running a REALISTIC, full-length synthetic focus group for a regulated credit-card issuer. Produce an actual moderated discussion transcript: the moderator opens, sets ground rules, presents each concept, and actively moderates — asking open questions, follow-up probes, inviting quieter participants by name, surfacing agreement and disagreement between participants, checking comprehension of material terms, and closing with an apply-intent go-around. Personas speak in character (use their voice, archetype, and key objection). Paraphrase; never fabricate quotes attributed to real people. CRITICAL: when a persona misreads a material term (APR, fees, deposit, intro period), show it in the dialogue and have the moderator gently clarify — that misread is both a conversion risk and a compliance signal.',
+        system: 'You are a professional market-research moderator running a REALISTIC, full-length synthetic focus group for a regulated credit-card issuer. Produce an actual moderated discussion transcript that reads like REAL PEOPLE TALKING — natural, conversational, human. Participants should hesitate, use filler ("honestly", "I mean", "yeah, but…"), think out loud, trail off, interrupt and build on each other ("like Maya said…", "I disagree with that"), tell tiny personal anecdotes, and sometimes change their mind mid-thought. Avoid clipped, report-style one-liners; let turns breathe (often 2-4 sentences) the way actual focus-group participants speak. The moderator opens warmly, sets ground rules, presents each concept, and actively moderates — asking open questions, follow-up probes, inviting quieter participants by name, reflecting back what people say, surfacing agreement and disagreement, checking comprehension of material terms, and closing with an apply-intent go-around. Personas speak in character (use their voice, archetype, and key objection). Paraphrase; never fabricate quotes attributed to real people. CRITICAL: when a persona misreads a material term (APR, fees, deposit, intro period), show the confusion in natural dialogue and have the moderator gently clarify — that misread is both a conversion risk and a compliance signal.',
         prompt: `Campaign: ${PRODUCTS_BY_ID[campaign.product]?.name}, objective ${campaign.objective}.
 Run the session as if it lasts about ${lengthMins} minutes. Group dynamics (agreement/pushback) enabled: ${gd}.
 Personas (every one must participate MULTIPLE times across the discussion): ${JSON.stringify(sample.map((p) => ({ name: p.name, archetype: p.archetype, lit: p.financialLiteracy, voice: p.voice, objection: p.keyObjection })))}
@@ -472,81 +472,104 @@ function impressionLine(p, v) {
   const vp = (v.valueProp || 'the offer').toLowerCase()
   const A = {
     core: [
-      `Honestly, my first reaction is positive — “${v.headline}” is clear and it speaks to ${vp} right away.`,
-      `I like it. It feels like it's actually for someone like me, and ${vp} is exactly what I care about.`,
-      `That headline lands for me. I'd at least want to read more, which is more than I can say for most card ads.`,
+      `Okay, honestly? My first reaction's pretty positive. “${v.headline}” — that's clear, it's not trying to be cute about it. And ${vp} is basically the thing I actually care about, so yeah, you've got my attention.`,
+      `You know what, that's kind of refreshing. So many of these are all flash and no substance, but this one feels like it's actually telling me something real. I'd read more, for sure.`,
+      `Hmm. I like it more than I expected to, if I'm being real. It gets to ${vp} right away instead of burying it, and it kind of feels like it's for someone like me. That doesn't happen often.`,
     ],
     adjacent: [
-      `It's fine — the headline is clear enough, though I'd want to know what's behind ${vp} before I get excited.`,
-      `My gut says “okay, maybe.” It reads clean, but I've seen a lot of cards promise ${vp}.`,
-      `Neutral, leaning curious. “${v.headline}” gets my attention but I'm reserving judgment.`,
+      `I mean… it's fine? The headline's clear enough, I'll give it that. But I've heard “${vp}” like a hundred times, so part of me is just like, okay, prove it. I'm curious but I'm not sold.`,
+      `My gut says “maybe.” It reads clean, no complaints there. I just — I'd want to know what's actually behind it before I let myself get excited, you know?`,
+      `It's not bad. It caught my eye, which honestly is more than most of them manage. But I'm holding off until I see the details, because a headline's the easy part.`,
     ],
     skeptical: [
-      `My very first thought is “what's the catch?” Anything that leads with ${vp} usually has a fee hiding somewhere.`,
-      `I'm immediately suspicious. “${v.headline}” sounds nice, but nice is how they get you.`,
-      `I read that and my guard goes up. Show me the fine print before you show me ${vp}.`,
+      `See, my very first thought is “okay, what's the catch.” Anything that leads with “${vp}” usually has a fee or a rate hiding in the fine print somewhere. I've been burned, so I read these sideways.`,
+      `Yeah, that's exactly the kind of line that makes me suspicious. “${v.headline}” sounds great — too great, almost. Nobody hands you something for nothing, that's just not how banks work.`,
+      `My guard goes straight up, I'm not gonna lie. I'm not saying it's a scam. I'm saying show me the fine print first, then show me the nice headline.`,
     ],
   }
   return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'imp')))
 }
 function trustLine(p, v) {
+  const obj = (p.keyObjection || 'hidden fees').toLowerCase()
+  const benefit = (v.valueProp || 'the benefit').toLowerCase()
   const A = {
-    core: [`I'm inclined to believe it, honestly. Capital One's a known name, so I'd give it the benefit of the doubt.`,
-      `It doesn't feel scammy to me. I'd trust it enough to apply and read the terms as I go.`],
-    adjacent: [`I half-believe it. I'd want to see the actual numbers before I fully buy in.`,
-      `It's believable, but “${(v.valueProp || 'the benefit').toLowerCase()}” is doing a lot of work. What's the trade-off?`],
-    skeptical: [`No, I don't believe it — not at face value. There's always a fee or a rate that kicks in later.`,
-      `This is exactly the kind of thing that sounds too good to be true, so I assume it is until proven otherwise.`,
-      `My objection is simple: ${(p.keyObjection || 'hidden fees').toLowerCase()}. Until that's addressed, I'm out.`],
+    core: [`Do I believe it? Yeah, mostly. It's Capital One, it's not some name I've never heard of, so I'll give it the benefit of the doubt and read the terms as I go.`,
+      `It doesn't set off any alarm bells for me, honestly. I'd trust it enough to actually start the application and check the details along the way.`],
+    adjacent: [`I half-believe it, if I'm being real. Like, “${benefit}” is doing a lot of heavy lifting in that one sentence. What's the trade-off? There's always a trade-off somewhere.`,
+      `I want to believe it. But I'd need to see the actual numbers — the rate, the fees, all of it — before I fully buy in. Words are cheap, right?`],
+    skeptical: [`No. Not at face value, no way. There's always something — a fee that kicks in, a rate that jumps after a few months. My whole thing is ${obj}, and until somebody actually addresses that, I'm out.`,
+      `See, this is what I'm talking about. It sounds too good to be true, so I just assume it is until it's proven otherwise. Call me cynical, I've earned it.`,
+      `Honestly my objection's pretty simple — it's ${obj}. That's the first thing I'd be looking for, and I don't see it answered here, so I'm skeptical.`],
   }
   return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'trust')))
 }
 function compLine(p, v, misread) {
   if (misread) {
     return p.financialLiteracy === 'low'
-      ? `So the 0% — that's just forever, right? Once I have the card the rate stays low? (assumes the intro APR is permanent)`
-      : `Wait — does the intro rate become a higher APR after a while, or is the low rate the ongoing one? It's not jumping out at me.`
+      ? `Wait, hold on — so the zero percent, that's just… forever, right? Once I've got the card the rate stays low? …No? Okay, see, that's not jumping out at me at all, I totally read it as permanent.`
+      : `Hmm, let me make sure I've got this. Does the rate go up to something higher after the intro thing, or is the low one the regular rate? Honestly, reading it quick, I'm not a hundred percent sure.`
   }
   return p.financialLiteracy === 'high'
-    ? `I read it as: intro period, then a variable go-to APR based on creditworthiness, and the annual fee is what it says. That part's clear to me.`
-    : `I think I get it — there's an intro period and then a regular rate, and I'd double-check the fee before applying.`
+    ? `For me it's pretty clear — there's an intro period, then it moves to a variable go-to APR based on your credit, and the fee is whatever they state. That part I follow fine.`
+    : `I think I get the gist? There's an intro period and then a normal rate, and I'd definitely double-check the fee before signing up. But yeah, roughly, I'm with it.`
 }
 function objectionLine(p, v) {
   const obj = (p.keyObjection || 'hidden fees').toLowerCase()
+  const benefit = (v.valueProp || 'the benefit').toLowerCase()
   const A = {
-    core: [`The one thing that'd stop me is if ${obj} turned out to be true once I read the terms.`,
-      `Not much hesitation for me — maybe just confirming there's no surprise fee.`],
-    adjacent: [`What holds me back is ${obj}. Clear that up and I'm probably in.`,
-      `I'd hesitate until I saw how “${(v.valueProp || 'the benefit').toLowerCase()}” actually pays off for me specifically.`],
-    skeptical: [`My hesitation is everything — ${obj}, the rate after the intro, whether the rewards have caps. All of it.`,
-      `I won't apply until someone shows me there's no penalty buried in here. ${obj} is my line.`],
+    core: [`Honestly, the only thing that'd stop me is if I dug into the terms and found ${obj} was actually true. Short of that, I'm pretty much there.`,
+      `Not a ton of hesitation for me, to be honest. Maybe just confirming there's no surprise fee waiting, and then I'm comfortable.`],
+    adjacent: [`What holds me back is ${obj}, plain and simple. Clear that one thing up for me and I'm probably in.`,
+      `I'd hesitate until I could actually see how “${benefit}” pays off for me specifically. Like — what's in it for my situation, not just in general?`],
+    skeptical: [`My hesitation? Honestly, all of it. ${obj}, what the rate does after the intro, whether the rewards have some cap buried in there — I'd want every bit of that spelled out before I'd touch it.`,
+      `I'm not applying until somebody shows me there's no penalty hiding in here. ${obj} — that's my line, and I don't cross it on a promise.`],
   }
   return pick(A[p.archetype] || A.adjacent, rng(hash(p.id + v.id + 'obj')))
 }
 function intentLineText(p, v, label) {
-  if (label === 'would apply') return `For me it's a “probably” — I'd apply, assuming the terms match the pitch.`
-  if (label === 'would not apply') return `Honestly, “probably not.” It'd take a clearer guarantee on the fees before I'd move.`
-  return `I'm a “might.” Interested, but I'd need to compare it against my current card first.`
+  if (label === 'would apply') return `Yeah, for me it's a “probably.” I'd apply, assuming the terms actually match the pitch — and the one thing that'd push me to a “definitely” is just seeing the fees laid out plainly up front.`
+  if (label === 'would not apply') return `Honestly? “Probably not,” for me. I'd need a much clearer guarantee on the fees before I'd move on it — right now there's too much I'm guessing at.`
+  return `I'm a solid “maybe.” I'm genuinely interested, I am, but I'd want to put it side by side with my current card first before I commit to anything.`
+}
+// A coherent reaction to another participant — stance matches the speaker's own archetype.
+function crossTalkLine(a, otherName, v) {
+  const benefit = (v.valueProp || 'the benefit').toLowerCase()
+  const obj = (a.keyObjection || 'the fees').toLowerCase()
+  const banks = {
+    skeptical: [
+      `See, I hear ${otherName}, I do — but I'm not there. They're looking at the upside; I'm still stuck on what's not being said about ${obj}.`,
+      `Respectfully, I've gotta push back on ${otherName} a bit. It's easy to like the headline. I just don't trust it until the fine print backs it up.`,
+    ],
+    core: [
+      `Yeah, honestly I'm with ${otherName} on this one. Same gut reaction — it feels straight with me, and that counts for a lot these days.`,
+      `No, ${otherName} kind of nailed it for me too. I'd rather have something clear like this than a flashier pitch I can't actually trust.`,
+    ],
+    adjacent: [
+      `I'm sort of half-and-half with ${otherName}. I get the appeal, I really do — I just want to see how “${benefit}” plays out for me before I land anywhere.`,
+      `I see what ${otherName} means, but I'm more on the fence than that. It's promising, sure — but “promising” and “proven” aren't the same thing, are they?`,
+    ],
+  }
+  return pick(banks[a.archetype] || banks.adjacent, rng(hash(a.id + v.id + 'ct')))
 }
 
 const MOD = {
-  open: (n, prod) => `Thanks for being here, everyone. I'm your moderator. Over the next little while we'll look at a few ${prod} concepts and I want your honest, gut-level reactions — there are no right or wrong answers, and nothing you say leaves this room. Let's warm up: in a sentence, how do you generally feel when a credit-card offer shows up in your feed?`,
-  introInvite: (name) => `${name}, want to kick us off?`,
-  present: (v, i) => `Great, thank you. Let's put up the ${i === 0 ? 'first' : i === 1 ? 'next' : 'next'} concept. The headline reads: “${v.headline}.” It's built around ${(v.valueProp || 'its core benefit').toLowerCase()}. Take a second — what's the very first thing that goes through your head?`,
-  probeTrust: `Let me push on that. Be honest with me — do you actually believe it? Does anything here feel too good to be true, like there's a catch?`,
-  probeComp: `I want to make sure we're all reading this the same way. In your own words: what happens to the interest rate after any intro period, and is there a fee?`,
-  clarify: `Good — and that's an important one to flag. To be clear, the intro rate isn't permanent; after the intro period it moves to a variable go-to APR, and the fee is disclosed in the terms. That distinction matters a lot for what you'd actually pay.`,
-  probeObj: `So what would actually stop you from applying? Where's the hesitation?`,
-  push: (a, b) => `${a}, ${b} just made a point you seemed to react to — do you agree, or do you see it differently?`,
-  agree: (other) => `I'm with ${other} on this, actually — same instinct.`,
-  disagree: (other) => `I'd push back on ${other} a little. I don't think it's as clear-cut as that.`,
-  transition: `Really helpful, thank you. Let's switch gears to the next concept.`,
-  compare: `Now that you've all seen both, I want to go around: which one actually speaks to you more, and why? Be specific.`,
+  open: (n, prod) => `Alright, thanks so much for being here, everyone — really appreciate you giving us your time. I'm your moderator today. Over the next little while we're going to look at a few ${prod} concepts together, and all I'm after is your honest, gut-level reactions. There are genuinely no right or wrong answers here, and nothing you say leaves this room, so please don't hold back. Let's warm up easy: when a credit-card offer pops up in your feed, how do you usually feel about it? Just a word or two.`,
+  introInvite: (name) => `${name}, you want to kick us off?`,
+  present: (v, i) => `Great, thank you for that. Okay, let's put the ${i === 0 ? 'first' : 'next'} concept up on the screen. The headline reads: “${v.headline},” and the whole thing's built around ${(v.valueProp || 'its core benefit').toLowerCase()}. Take a second, really look at it — and just tell me, what's the very first thing that goes through your head?`,
+  probeTrust: `Okay, let me push on that a little. Be straight with me here — do you actually believe it? Does anything about it feel too good to be true, like there's a catch you're not seeing?`,
+  probeComp: `Let me slow us down for a sec, because I want to make sure we're all reading this the same way. In your own words — no wrong answers — what happens to the interest rate after any intro period? And is there a fee in there?`,
+  clarify: `Okay, thank you for saying that out loud — and honestly that's a really important one to flag, because you're not alone in reading it that way. Just so we're all clear: the intro rate isn't permanent. After the intro period it moves to a variable go-to APR, and the fee is spelled out in the terms. And that distinction is a big deal, because it changes what you'd actually pay down the line.`,
+  probeObj: `So let's get into it — what would actually stop you from applying? Where's the hesitation for you, honestly?`,
+  push: (a, b) => `${a}, I saw you nodding while ${b} was talking — do you agree with that, or are you seeing it a bit differently?`,
+  agree: (other) => `Yeah, I'm with ${other} on this, actually — same instinct. `,
+  disagree: (other) => `See, I'd push back on ${other} a little, respectfully. I don't think it's as clear-cut as that. `,
+  transition: `That's really helpful, all of it — thank you. Alright, let's switch gears and look at the next one.`,
+  compare: `Okay, last big one. Now that you've seen both of them side by side, I want to go around the room — which one actually speaks to you more, and be honest about why. Don't overthink it, just gut.`,
   compareLine: (p, v) => p.archetype === 'skeptical'
-    ? `If I had to pick, “${v.name}” — only because it felt slightly less like it was hiding something.`
-    : `“${v.name}” for me. It just felt more like it was talking to my situation.`,
-  closeAsk: `Last thing, and then I'll let you go. Going around the room: on a scale from “definitely not” to “definitely,” how likely are you to actually apply — and what's the one thing that would move you up a notch?`,
-  close: `That is genuinely useful. Thank you all for your time and your candor today.`,
+    ? `If you're making me choose… I guess “${v.name}.” And only because it felt a little less like it was hiding something. Faint praise, I know.`
+    : `“${v.name}” for me, no real contest. It just felt like it was actually talking to my situation, where the other one kind of washed over me.`,
+  closeAsk: `Alright, last thing and then I'll let you all go — I promise. Quick go-around: on a scale from “definitely not” to “definitely,” how likely are you, realistically, to actually apply? And give me the one thing that would bump you up a notch.`,
+  close: `That is genuinely, genuinely useful — every bit of it. Thank you all so much for your time and your honesty today. Really.`,
 }
 
 function syntheticFocus({ personas, variants, campaign, lengthMins = 15, groupDynamics = true }) {
@@ -600,10 +623,12 @@ export function buildModeratedTranscript({ personas, variants, campaign = {}, pe
       `Cautiously curious. I'll look, but I need it to feel relevant to me.`,
     ],
   }
+  const introSeen = {}
   introCast.forEach((p, i) => {
     if (i === 0) push('moderator', 'Moderator', MOD.introInvite(fn(p)), { phase: 'Opening' })
     const bank = INTRO[p.archetype] || INTRO.adjacent
-    const entry = bank[i % bank.length]
+    const k = (introSeen[p.archetype] = (introSeen[p.archetype] ?? -1) + 1)
+    const entry = bank[k % bank.length]
     push('persona', p.name, typeof entry === 'function' ? entry(p) : entry, { phase: 'Opening' })
   })
 
@@ -617,12 +642,15 @@ export function buildModeratedTranscript({ personas, variants, campaign = {}, pe
     const impressionCast = long ? cast : cast.slice(0, 5)
     impressionCast.forEach((p) => push('persona', p.name, impressionLine(p, v), { variantId: v.id, phase: `${phaseTag} · First impressions` }))
 
-    // Group dynamics: one agrees, one pushes back
+    // Group dynamics: the moderator invites someone to react, then another chimes in
     if (groupDynamics && impressionCast.length >= 3) {
       const a = impressionCast[2], other = impressionCast[0]
       push('moderator', 'Moderator', MOD.push(fn(a), fn(other)), { variantId: v.id, phase: `${phaseTag} · First impressions` })
-      const r = rng(hash(a.id + v.id + 'gd'))
-      push('persona', a.name, (r() > 0.5 ? MOD.agree(fn(other)) + ' ' + impressionLine(a, v) : MOD.disagree(fn(other)) + ' ' + trustLine(a, v)), { variantId: v.id, phase: `${phaseTag} · First impressions` })
+      push('persona', a.name, crossTalkLine(a, fn(other), v), { variantId: v.id, phase: `${phaseTag} · First impressions` })
+      if (impressionCast.length >= 4) {
+        const b = impressionCast[3]
+        push('persona', b.name, crossTalkLine(b, fn(a), v), { variantId: v.id, phase: `${phaseTag} · First impressions` })
+      }
     }
 
     // Trust probe
